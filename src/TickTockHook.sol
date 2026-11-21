@@ -16,9 +16,10 @@ import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {LibClone} from "solady/utils/LibClone.sol";
 import {ReentrancyGuardTransient} from "solady/utils/ReentrancyGuardTransient.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {TickTockState} from "./base/TickTockState.sol";
+import {TickTockEngine} from "./TickTockEngine.sol";
 import {HookConfig} from "./libraries/HookConfig.sol";
 import {LevelBitmap} from "./libraries/LevelBitmap.sol";
 import {OrderMath} from "./libraries/OrderMath.sol";
@@ -29,7 +30,7 @@ import {OrderMath} from "./libraries/OrderMath.sol";
 /// manager and the swap budget are immutables of the implementation, shared by every clone of one factory. The
 /// config (level spacing and spreads) is each clone's immutable args. The implementation refuses every call that
 /// doesn't come through a clone.
-contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
+contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuardTransient {
     using CurrencyLibrary for Currency;
     using LevelBitmap for mapping(int16 => uint256);
     using LPFeeLibrary for uint24;
@@ -38,54 +39,11 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
-    // ---------------------------------------------------------------------------------------------------------------
-    // Types
-    // ---------------------------------------------------------------------------------------------------------------
-
-    /// @notice One order level `[L, L+1)`. The hook owns one v4 position per level, holding both sides.
-    struct Level {
-        uint112 askLiquidity;
-        uint112 bidLiquidity;
-        /// @dev Bit k is set when the ask (or bid) slot for spread k at this level holds a group.
-        uint8 askMask;
-        uint8 bidMask;
-        /// @dev Fees per unit of the level's liquidity, as in v4. Wraps on overflow.
-        uint256 feeGrowth0X128;
-        uint256 feeGrowth1X128;
-    }
-
-    /// @notice The users sharing one slot.
-    struct Group {
-        uint128 liquidity;
-        uint128 pending0;
-        uint128 pending1;
-        /// @dev Set when the group was absorbed by a merge. Its `totalShares` is then frozen.
-        uint64 mergedInto;
-        /// @dev The current slot: the strategy `(sellLevel, spreadIndex)` and its side.
-        int24 sellLevel;
-        uint8 spreadIndex;
-        bool isBid;
-        PoolId poolId;
-        uint256 totalShares;
-        uint256 feeGrowthLast0X128;
-        uint256 feeGrowthLast1X128;
-        /// @dev Shares the survivor minted for this group's holders, when absorbed.
-        uint256 mergedShares;
-    }
-
-    /// @notice A pool's key (tick spacing 1 and this hook are implied) and its scan cursors.
-    struct PoolState {
-        Currency currency0;
-        Currency currency1;
-        uint24 fee;
-        int24 askCursor;
-        int24 bidCursor;
-    }
-
     enum Action {
         Deposit,
         Withdraw,
-        MovePrice
+        MovePrice,
+        FlipLevel
     }
 
     struct DepositParams {
@@ -116,107 +74,22 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
         address recipient;
     }
 
-    // ---------------------------------------------------------------------------------------------------------------
-    // Constants, immutables and storage
-    // ---------------------------------------------------------------------------------------------------------------
-
-    /// @dev Slot indices in `_slotGroups`: asks use `k`, bids use `BID_SLOTS + k`.
-    uint256 internal constant BID_SLOTS = 8;
-
-    /// @notice The v4 pool manager.
-    IPoolManager public immutable poolManager;
-
     /// @notice The most liquidity operations one swap's `afterSwap` may spend.
     uint16 public immutable maxOpsPerSwap;
 
+    /// @notice The flip logic, run with `delegatecall` on this hook's storage.
+    address public immutable engine;
+
     /// @dev This contract's own address, to tell the implementation apart from its clones.
     address private immutable _implementation;
-
-    /// @notice The id of the last group created. Ids only increase, so a lower id is an older group.
-    uint64 public lastGroupId;
-
-    /// @notice A user's shares in a group.
-    mapping(address user => mapping(uint64 groupId => uint256)) public sharesOf;
-
-    mapping(PoolId => PoolState) internal _pools;
-    mapping(PoolId => mapping(int24 level => Level)) internal _levels;
-    mapping(PoolId => mapping(int24 level => uint64[16])) internal _slotGroups;
-    mapping(PoolId => mapping(int16 => uint256)) internal _askBitmap;
-    mapping(PoolId => mapping(int16 => uint256)) internal _bidBitmap;
-    mapping(uint64 groupId => Group) internal _groups;
-
-    // ---------------------------------------------------------------------------------------------------------------
-    // Events and errors
-    // ---------------------------------------------------------------------------------------------------------------
-
-    event Deposit(
-        PoolId indexed poolId,
-        uint64 indexed groupId,
-        address indexed recipient,
-        address sender,
-        int24 sellLevel,
-        uint8 spreadIndex,
-        bool startWithToken0,
-        uint256 amount,
-        uint256 liquidity,
-        uint256 shares
-    );
-    event Withdraw(
-        uint64 indexed groupId,
-        address indexed owner,
-        address recipient,
-        uint256 shares,
-        uint256 amount0,
-        uint256 amount1
-    );
-    event SharesConverted(
-        address indexed owner, uint64 indexed fromGroup, uint64 indexed toGroup, uint256 fromShares, uint256 toShares
-    );
-
-    /// @notice The implementation was called directly instead of through a clone.
-    error NotAClone();
-    /// @notice A pool callback came from someone other than the pool manager.
-    error NotPoolManager();
-    /// @notice Pools are only created by the hook, on the first deposit.
-    error PoolCreationRestricted();
-    /// @notice Only the hook provides liquidity in its pools.
-    error LiquidityRestricted();
-    /// @notice Donations are blocked.
-    error DonationsBlocked();
-    /// @notice A callback whose permission flag is off was called.
-    error HookNotImplemented();
-    error DeadlinePassed();
-    error ZeroAmount();
-    error ZeroShares();
-    error InvalidRecipient();
-    /// @notice The key's hook isn't this one, or its tick spacing isn't 1.
-    error InvalidPoolKey();
-    error DynamicFeeNotSupported();
-    error InvalidSpreadIndex();
-    error LevelNotOnGrid();
-    /// @notice One of the strategy's two levels is outside v4's tick bounds.
-    error StrategyOutOfBounds();
-    error PoolNotFound();
-    /// @notice The amount is too small to buy any liquidity.
-    error ZeroLiquidity();
-    /// @notice The amount buys more liquidity than one tick can hold.
-    error TooMuchLiquidity();
-    error InsufficientShares();
-    /// @notice Orders sit between the price and where the deposit needs it.
-    error OrdersInTheWay();
-    /// @notice The price is inside the level, which holds orders.
-    error LevelInRange();
-    /// @notice ETH was sent for a token that isn't native.
-    error UnexpectedValue();
-    error InsufficientValue();
 
     // ---------------------------------------------------------------------------------------------------------------
     // Construction and access
     // ---------------------------------------------------------------------------------------------------------------
 
-    constructor(IPoolManager poolManager_, uint16 maxOpsPerSwap_) {
-        poolManager = poolManager_;
+    constructor(IPoolManager poolManager_, uint16 maxOpsPerSwap_) TickTockState(poolManager_) {
         maxOpsPerSwap = maxOpsPerSwap_;
+        engine = address(new TickTockEngine(poolManager_));
         _implementation = address(this);
     }
 
@@ -341,6 +214,13 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
         poolManager.unlock(abi.encode(Action.MovePrice, abi.encode(key, targetSqrtPriceX96)));
     }
 
+    /// @notice Flips a level whose orders are fully crossed but weren't flipped by a swap: a skipped level, or one
+    /// the swap budget didn't reach (DESIGN.md section 5.4). Anyone can call it.
+    function flipLevel(PoolKey calldata key, int24 level) external onlyClone nonReentrant {
+        if (_pools[key.toId()].currency1.isAddressZero()) revert PoolNotFound();
+        poolManager.unlock(abi.encode(Action.FlipLevel, abi.encode(key, level)));
+    }
+
     /// @inheritdoc IUnlockCallback
     function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
         (Action action, bytes memory payload) = abi.decode(data, (Action, bytes));
@@ -348,6 +228,13 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
         if (action == Action.Withdraw) {
             (uint256 amount0, uint256 amount1) = _withdraw(abi.decode(payload, (WithdrawParams)));
             return abi.encode(amount0, amount1);
+        }
+        if (action == Action.FlipLevel) {
+            (PoolKey memory flipKey, int24 levelTick) = abi.decode(payload, (PoolKey, int24));
+            if (_flipIfCrossed(flipKey, flipKey.toId(), _config(), levelTick) == 0) revert NothingToFlip();
+            _settleDeltas(flipKey.currency0);
+            _settleDeltas(flipKey.currency1);
+            return "";
         }
         (PoolKey memory key, uint160 target) = abi.decode(payload, (PoolKey, uint160));
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
@@ -536,6 +423,8 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
                 currency0: p.key.currency0, currency1: p.key.currency1, fee: p.key.fee, askCursor: t, bidCursor: t
             });
         } else {
+            // A crossed target level is flipped first, so its orders get their trade (DESIGN.md section 7, step 3).
+            _flipIfCrossed(p.key, poolId, _config(), p.level);
             bool insideLevel = sqrtPriceX96 > sqrtLower && sqrtPriceX96 < sqrtUpper;
             if (p.isBid && sqrtPriceX96 < sqrtUpper) _movePrice(p.key, pool, sqrtPriceX96, sqrtUpper, insideLevel);
             if (!p.isBid && sqrtPriceX96 > sqrtLower) _movePrice(p.key, pool, sqrtPriceX96, sqrtLower, insideLevel);
@@ -645,47 +534,40 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Positions, fees and settlement
+    // Flips and merges
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// @dev Changes a level's position and adds the fees it collected to the level's fee growth, over the liquidity
-    /// the level had before the change. Returns the principal part of the hook's balance change.
-    function _modifyLevel(PoolKey memory key, Level storage level, int24 levelTick, int256 liquidityDelta)
+    /// @dev Flips whichever side of a level is fully crossed, if either is.
+    /// @return ops The liquidity operations spent, 0 if nothing flipped.
+    function _flipIfCrossed(PoolKey memory key, PoolId poolId, HookConfig.Config memory cfg, int24 levelTick)
         internal
-        returns (BalanceDelta principal)
+        returns (uint256 ops)
     {
-        uint256 liquidityBefore = uint256(level.askLiquidity) + level.bidLiquidity;
-        (BalanceDelta callerDelta, BalanceDelta fees) = poolManager.modifyLiquidity(
-            key, IPoolManager.ModifyLiquidityParams(levelTick, levelTick + 1, liquidityDelta, 0), ""
-        );
-        if (liquidityBefore != 0) {
-            // Fees are never negative. Growth wraps on overflow, as in v4.
-            unchecked {
-                level.feeGrowth0X128 += FullMath.mulDiv(
-                    uint256(int256(fees.amount0())), FixedPoint128.Q128, liquidityBefore
-                );
-                level.feeGrowth1X128 += FullMath.mulDiv(
-                    uint256(int256(fees.amount1())), FixedPoint128.Q128, liquidityBefore
-                );
-            }
-        }
-        principal = callerDelta - fees;
+        if (levelTick % cfg.levelSpacing != 0) return 0;
+        Level storage level = _levels[poolId][levelTick];
+        if (level.askMask == 0 && level.bidMask == 0) return 0;
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolId);
+        (, int24 highestCrossedAsk, int24 lowestCrossedBid) = OrderMath.crossings(sqrtPriceX96, tick);
+        if (level.askMask != 0 && levelTick <= highestCrossedAsk) return _engineFlip(key, levelTick, false);
+        if (level.bidMask != 0 && levelTick >= lowestCrossedBid) return _engineFlip(key, levelTick, true);
+        return 0;
     }
 
-    /// @dev Credits a group the fees its liquidity earned at its level since it was last credited.
-    function _creditFees(Group storage g, Level storage level) internal {
-        uint256 growth0 = level.feeGrowth0X128;
-        uint256 growth1 = level.feeGrowth1X128;
-        uint256 liquidity = g.liquidity;
-        if (liquidity != 0) {
-            unchecked {
-                g.pending0 += FullMath.mulDiv(growth0 - g.feeGrowthLast0X128, liquidity, FixedPoint128.Q128).toUint128();
-                g.pending1 += FullMath.mulDiv(growth1 - g.feeGrowthLast1X128, liquidity, FixedPoint128.Q128).toUint128();
+    /// @dev Runs `TickTockEngine.flipSide` on this hook's storage.
+    function _engineFlip(PoolKey memory key, int24 levelTick, bool bids) internal returns (uint256 ops) {
+        (bool success, bytes memory result) =
+            engine.delegatecall(abi.encodeCall(TickTockEngine.flipSide, (key, levelTick, bids)));
+        if (!success) {
+            assembly ("memory-safe") {
+                revert(add(result, 0x20), mload(result))
             }
         }
-        g.feeGrowthLast0X128 = growth0;
-        g.feeGrowthLast1X128 = growth1;
+        return abi.decode(result, (uint256));
     }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Positions, fees and settlement
+    // ---------------------------------------------------------------------------------------------------------------
 
     /// @dev A level's fee growth including the fees its position earned but hasn't collected yet.
     function _projectedFeeGrowth(PoolId poolId, int24 levelTick, Level storage level)
@@ -760,20 +642,6 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
     // Slots
     // ---------------------------------------------------------------------------------------------------------------
 
-    function _addToMask(PoolId poolId, Level storage level, int24 levelTick, int24 spacing, bool isBid, uint8 k)
-        internal
-    {
-        // forge-lint: disable-next-line(incorrect-shift)
-        uint8 bit = uint8(1 << k);
-        if (isBid) {
-            if (level.bidMask == 0) _bidBitmap[poolId].set(levelTick, spacing);
-            level.bidMask |= bit;
-        } else {
-            if (level.askMask == 0) _askBitmap[poolId].set(levelTick, spacing);
-            level.askMask |= bit;
-        }
-    }
-
     /// @dev Empties a group's slot. The group is never reused: the next deposit there gets a new id.
     function _freeSlot(PoolId poolId, Level storage level, int24 levelTick, int24 spacing, Group storage g) internal {
         uint8 k = g.spreadIndex;
@@ -793,10 +661,6 @@ contract TickTockHook is IHooks, IUnlockCallback, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------------------------------------
-
-    function _config() internal view returns (HookConfig.Config memory) {
-        return HookConfig.decode(LibClone.argsOnClone(address(this)));
-    }
 
     /// @dev Validates a strategy and returns the level of the side being placed (DESIGN.md section 7, step 1).
     function _strategyLevel(HookConfig.Config memory cfg, int24 sellLevel, uint8 spreadIndex, bool isBid)

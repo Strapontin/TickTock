@@ -43,7 +43,7 @@ Prices are always token1 per token0, the v4 convention. The front-end converts t
 
 ### 3.1 `TickTockFactory` (one per chain)
 
-- Constructor: `(IPoolManager poolManager, uint16 maxOpsPerSwap)`. It deploys the hook implementation once, with both values as the implementation's immutables. Every clone of this factory shares them.
+- Constructor: `(IPoolManager poolManager, uint16 maxOpsPerSwap)`. It deploys the hook implementation once, with both values as the implementation's immutables, and the implementation deploys the engine (section 3.3). Every clone of this factory shares them.
   - `maxOpsPerSwap` is the most liquidity operations one swap's `afterSwap` may spend. It's chosen per chain from the gas measurements: higher on L2s, lower on mainnet.
   - It must be at least 9 (1 removal plus 8 additions), so that the busiest possible level fits in one swap.
 - `createHook(uint24 levelSpacing, int24[] spreads, bytes32 salt) returns (address hook)`:
@@ -102,7 +102,17 @@ Views: `positionOf(user, groupId)` (current token amounts, fees not yet collecte
 
 **Reentrancy.** Every entry point, `afterSwap` included, takes a lock in transient storage and reverts if it's already held. Pairs can use any token, and the PoolManager stays unlocked during the hook's own calls. Without the lock, a token's `transferFrom` or an ETH recipient could call `swap` on a TickTock pool and run `afterSwap` halfway through a deposit. This doesn't conflict with the rule that `afterSwap` never reverts because of order state (section 5.2): the lock is only held inside the hook's own calls, so the only transaction it can make revert is the one that called the hook.
 
-### 3.3 Events
+### 3.3 `TickTockEngine` (one per factory)
+
+The flip logic (sections 5.2 to 5.4) lives in a separate contract, so the hook stays under the 24 KB contract size limit.
+
+- The hook implementation deploys the engine in its constructor and keeps its address as an immutable.
+- The hook runs the engine's code with `delegatecall`. The engine then works on the clone's storage, and its pool calls come from the clone, as if the code were the hook's own.
+- Both contracts inherit all their storage from one base, `TickTockState`, so their layouts can't drift apart. Neither declares storage of its own.
+- The engine refuses direct calls.
+- The cost is one `delegatecall`, about 2.6k gas, each time the hook flips. A deposit only calls the engine when its target level is crossed.
+
+### 3.4 Events
 
 | Event | When |
 |---|---|
@@ -289,6 +299,8 @@ No minimum order size: skipping small levels handles dust without one. A minimum
 ```
 src/TickTockFactory.sol
 src/TickTockHook.sol
+src/TickTockEngine.sol            flip logic, run by the hook with delegatecall
+src/base/TickTockState.sol        storage, types, events and errors shared by the hook and the engine
 src/libraries/HookConfig.sol      config validation and its encoding as clone args
 src/libraries/LevelBitmap.sol     compressed bitmap with next-level search
 src/libraries/OrderMath.sol       one-tick liquidity and amounts, sizes, values, fill fractions
@@ -298,7 +310,7 @@ script/MineSalt.s.sol             finds a salt for a config
 script/Deploy.s.sol               factory, then a config hook
 ```
 
-Dependencies, pinned: `v4-core` v4.0.0 (the deployed release), `solady` v0.1.26 (`LibClone`), `forge-std` v1.17.0. `v4-periphery` isn't needed: the one-tick liquidity math is a few lines on top of v4-core's `SqrtPriceMath` and `FullMath`. If the hook outgrows the 24 KB contract size limit, the views move to a separate lens contract.
+Dependencies, pinned: `v4-core` v4.0.0 (the deployed release), `solady` v0.1.26 (`LibClone`), `forge-std` v1.17.0. `v4-periphery` isn't needed: the one-tick liquidity math is a few lines on top of v4-core's `SqrtPriceMath` and `FullMath`. If the hook outgrows the 24 KB contract size limit again, the views move to a separate lens contract.
 
 Tests:
 - Factory: config validation, duplicate refusal, wrong salt refused, address flags, `maxOpsPerSwap < 9` refused, the implementation refusing direct calls.

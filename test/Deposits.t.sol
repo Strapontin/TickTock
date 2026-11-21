@@ -11,6 +11,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {OrderMath} from "../src/libraries/OrderMath.sol";
 import {TickTockHook} from "../src/TickTockHook.sol";
+import {TickTockState} from "../src/base/TickTockState.sol";
 import {TickTockTestBase} from "./utils/TickTockTestBase.sol";
 
 contract DepositsTest is TickTockTestBase {
@@ -45,12 +46,12 @@ contract DepositsTest is TickTockTestBase {
         assertEq(hook.sharesOf(alice, groupId), shares);
         assertEq(_positionLiquidity(hook, poolKey, 100), liquidity);
 
-        TickTockHook.Level memory level = hook.getLevel(poolId, 100);
+        TickTockState.Level memory level = hook.getLevel(poolId, 100);
         assertEq(level.askLiquidity, liquidity);
         assertEq(level.askMask, 1);
         assertEq(hook.slotGroup(poolId, 100, false, 0), groupId);
 
-        TickTockHook.PoolState memory pool = hook.getPool(poolId);
+        TickTockState.PoolState memory pool = hook.getPool(poolId);
         assertEq(pool.askCursor, 100);
         assertEq(pool.bidCursor, 100);
 
@@ -73,7 +74,7 @@ contract DepositsTest is TickTockTestBase {
         assertEq(hook.slotGroup(poolId, 50, true, 1), groupId);
         assertApproxEqAbs(balanceBefore - _balance(currency1, alice), 1e18, 1);
 
-        TickTockHook.Group memory g = hook.getGroup(groupId);
+        TickTockState.Group memory g = hook.getGroup(groupId);
         assertEq(g.sellLevel, 100);
         assertEq(g.spreadIndex, 1);
         assertTrue(g.isBid);
@@ -126,7 +127,7 @@ contract DepositsTest is TickTockTestBase {
     function test_ordersInTheWay() public {
         _deposit(hook, poolKey, alice, 100, 0, true, 1e18); // ask at 100, price at its lower edge
         // A bid at 150 needs the price above 151, through the ask.
-        vm.expectRevert(TickTockHook.OrdersInTheWay.selector);
+        vm.expectRevert(TickTockState.OrdersInTheWay.selector);
         _deposit(hook, poolKey, bob, 160, 0, false, 1e18);
     }
 
@@ -135,7 +136,7 @@ contract DepositsTest is TickTockTestBase {
         (uint160 lower, uint160 upper) = OrderMath.bounds(100);
         _swapTo(poolKey, lower + (upper - lower) / 2);
 
-        vm.expectRevert(TickTockHook.LevelInRange.selector);
+        vm.expectRevert(TickTockState.LevelInRange.selector);
         _deposit(hook, poolKey, bob, 100, 0, true, 1e18);
     }
 
@@ -151,7 +152,7 @@ contract DepositsTest is TickTockTestBase {
         assertEq(OrderMath.amount1ForLiquidity(lower, upper, liquidity, true), 1, "1 wei crosses the dust");
 
         // A bid at the same level needs the price at the dust's upper edge.
-        vm.expectRevert(TickTockHook.OrdersInTheWay.selector);
+        vm.expectRevert(TickTockState.OrdersInTheWay.selector);
         _deposit(hook, poolKey, bob, dust + 10, 0, false, 1e18);
     }
 
@@ -161,7 +162,7 @@ contract DepositsTest is TickTockTestBase {
         assertEq(_price(poolKey), _sqrt(-500));
         assertEq(hook.getPool(poolId).askCursor, -500);
 
-        vm.expectRevert(TickTockHook.OrdersInTheWay.selector);
+        vm.expectRevert(TickTockState.OrdersInTheWay.selector);
         hook.movePrice(poolKey, _sqrt(200));
 
         // Moving to the current price does nothing.
@@ -169,7 +170,7 @@ contract DepositsTest is TickTockTestBase {
     }
 
     function test_movePriceUnknownPool() public {
-        vm.expectRevert(TickTockHook.PoolNotFound.selector);
+        vm.expectRevert(TickTockState.PoolNotFound.selector);
         hook.movePrice(poolKey, _sqrt(0));
     }
 
@@ -206,18 +207,18 @@ contract DepositsTest is TickTockTestBase {
     function test_nativeEthInsufficientValue() public {
         PoolKey memory ethKey = PoolKey(CurrencyLibrary.ADDRESS_ZERO, currency1, 3000, 1, IHooks(address(hook)));
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.InsufficientValue.selector);
+        vm.expectRevert(TickTockState.InsufficientValue.selector);
         hook.deposit{value: 1e17}(ethKey, 100, 0, true, 1e18, 0, alice, block.timestamp);
     }
 
     function test_ethSentForAnErc20IsRefused() public {
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.UnexpectedValue.selector);
+        vm.expectRevert(TickTockState.UnexpectedValue.selector);
         hook.deposit{value: 1}(poolKey, 100, 0, true, 1e18, 0, alice, block.timestamp);
 
         PoolKey memory ethKey = PoolKey(CurrencyLibrary.ADDRESS_ZERO, currency1, 3000, 1, IHooks(address(hook)));
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.UnexpectedValue.selector);
+        vm.expectRevert(TickTockState.UnexpectedValue.selector);
         hook.deposit{value: 1}(ethKey, 100, 0, false, 1e18, 0, alice, block.timestamp); // a bid pays token1
     }
 
@@ -228,7 +229,7 @@ contract DepositsTest is TickTockTestBase {
     function test_minShares() public {
         uint256 liquidity = _askLiquidity(100, 1e18);
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.InsufficientShares.selector);
+        vm.expectRevert(TickTockState.InsufficientShares.selector);
         hook.deposit(poolKey, 100, 0, true, 1e18, liquidity + 1, alice, block.timestamp);
 
         vm.prank(alice);
@@ -238,38 +239,38 @@ contract DepositsTest is TickTockTestBase {
     function test_deadline() public {
         vm.warp(1000);
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.DeadlinePassed.selector);
+        vm.expectRevert(TickTockState.DeadlinePassed.selector);
         hook.deposit(poolKey, 100, 0, true, 1e18, 0, alice, 999);
     }
 
     function test_invalidPoolKeys() public {
         TickTockHook other = _createHook(10, _spreads(20));
-        _expectDepositRevert(_key(other, 3000), 100, 0, 1e18, TickTockHook.InvalidPoolKey.selector);
+        _expectDepositRevert(_key(other, 3000), 100, 0, 1e18, TickTockState.InvalidPoolKey.selector);
 
         PoolKey memory wideSpacing = poolKey;
         wideSpacing.tickSpacing = 2;
-        _expectDepositRevert(wideSpacing, 100, 0, 1e18, TickTockHook.InvalidPoolKey.selector);
+        _expectDepositRevert(wideSpacing, 100, 0, 1e18, TickTockState.InvalidPoolKey.selector);
 
         PoolKey memory dynamicFee = _key(hook, LPFeeLibrary.DYNAMIC_FEE_FLAG);
-        _expectDepositRevert(dynamicFee, 100, 0, 1e18, TickTockHook.DynamicFeeNotSupported.selector);
+        _expectDepositRevert(dynamicFee, 100, 0, 1e18, TickTockState.DynamicFeeNotSupported.selector);
     }
 
     function test_invalidStrategies() public {
-        _expectDepositRevert(poolKey, 100, 3, 1e18, TickTockHook.InvalidSpreadIndex.selector);
-        _expectDepositRevert(poolKey, 105, 0, 1e18, TickTockHook.LevelNotOnGrid.selector);
+        _expectDepositRevert(poolKey, 100, 3, 1e18, TickTockState.InvalidSpreadIndex.selector);
+        _expectDepositRevert(poolKey, 105, 0, 1e18, TickTockState.LevelNotOnGrid.selector);
         // The bid level would be below MIN_TICK.
-        _expectDepositRevert(poolKey, -887_270, 0, 1e18, TickTockHook.StrategyOutOfBounds.selector);
+        _expectDepositRevert(poolKey, -887_270, 0, 1e18, TickTockState.StrategyOutOfBounds.selector);
         // The ask level's range would end above MAX_TICK.
-        _expectDepositRevert(poolKey, 887_280, 0, 1e18, TickTockHook.StrategyOutOfBounds.selector);
+        _expectDepositRevert(poolKey, 887_280, 0, 1e18, TickTockState.StrategyOutOfBounds.selector);
     }
 
     function test_invalidAmountsAndRecipient() public {
-        _expectDepositRevert(poolKey, 100, 0, 0, TickTockHook.ZeroAmount.selector);
+        _expectDepositRevert(poolKey, 100, 0, 0, TickTockState.ZeroAmount.selector);
         // At a very low price, 1 wei of token0 buys no liquidity.
-        _expectDepositRevert(poolKey, -880_000, 0, 1, TickTockHook.ZeroLiquidity.selector);
+        _expectDepositRevert(poolKey, -880_000, 0, 1, TickTockState.ZeroLiquidity.selector);
 
         vm.prank(alice);
-        vm.expectRevert(TickTockHook.InvalidRecipient.selector);
+        vm.expectRevert(TickTockState.InvalidRecipient.selector);
         hook.deposit(poolKey, 100, 0, true, 1e18, 0, address(0), block.timestamp);
     }
 

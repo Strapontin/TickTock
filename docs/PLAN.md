@@ -16,7 +16,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | 1 | Libraries | Done |
 | 2 | Factory and hook skeleton | Done |
 | 3 | Deposits, withdrawals and fees | Done |
-| 4 | Flips and merges | To do |
+| 4 | Flips and merges | Done |
 | 5 | Swaps: budget, skipping and cursors | To do |
 | 6 | Partial flips | To do |
 | 7 | Hardening | To do |
@@ -68,7 +68,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 
 ### 4. Flips and merges
 
-- Code size first: after step 3 the hook is 17.8 KB of the 24 KB limit. If the flip code doesn't fit, it moves into an external library working on the hook's storage, or the views move into a lens contract.
+- Code size: the flip code didn't fit in the hook, so it lives in `TickTockEngine`, run with `delegatecall` on the hook's storage (DESIGN.md section 3.3). After this step the hook is 18.8 KB and the engine 7.3 KB.
 - The flip of one level, both sides and several spreads, with compounding.
 - The per-tick limit path: place what fits, keep the rest unplaced.
 - Merges: the older group survives, `mergedShares`, one-hop conversion on withdrawal.
@@ -82,7 +82,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 
 ### 5. Swaps: budget, skipping and cursors
 
-- `afterSwap`: the two-pass scan, the largest-level skip rule, the operation budget and the cursor rules.
+- `afterSwap`: the two-pass scan, the largest-level skip rule, the operation budget and the cursor rules. The scan goes in the engine.
 - `flipCrossed`.
 - Tests:
   - Leftovers.

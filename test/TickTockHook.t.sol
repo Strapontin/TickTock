@@ -12,6 +12,7 @@ import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {TickTockHook} from "../src/TickTockHook.sol";
+import {TickTockState} from "../src/base/TickTockState.sol";
 import {TickTockTestBase} from "./utils/TickTockTestBase.sol";
 
 /// @notice The hook skeleton: permissions, refused callbacks and access control.
@@ -31,7 +32,7 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
     function test_externalInitializeRefused() public {
         vm.expectRevert(
             _wrapped(
-                IHooks.beforeInitialize.selector, abi.encodeWithSelector(TickTockHook.PoolCreationRestricted.selector)
+                IHooks.beforeInitialize.selector, abi.encodeWithSelector(TickTockState.PoolCreationRestricted.selector)
             )
         );
         manager.initialize(poolKey, TickMath.getSqrtPriceAtTick(0));
@@ -41,7 +42,7 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
         _initializeAsHook();
         vm.expectRevert(
             _wrapped(
-                IHooks.beforeAddLiquidity.selector, abi.encodeWithSelector(TickTockHook.LiquidityRestricted.selector)
+                IHooks.beforeAddLiquidity.selector, abi.encodeWithSelector(TickTockState.LiquidityRestricted.selector)
             )
         );
         modifyLiquidityRouter.modifyLiquidity(poolKey, IPoolManager.ModifyLiquidityParams(0, 1, 1e18, 0), "");
@@ -50,7 +51,7 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
     function test_donationsRefused() public {
         _initializeAsHook();
         vm.expectRevert(
-            _wrapped(IHooks.beforeDonate.selector, abi.encodeWithSelector(TickTockHook.DonationsBlocked.selector))
+            _wrapped(IHooks.beforeDonate.selector, abi.encodeWithSelector(TickTockState.DonationsBlocked.selector))
         );
         donateRouter.donate(poolKey, 1, 1, "");
     }
@@ -70,22 +71,22 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
     }
 
     function test_afterSwapOnlyFromPoolManager() public {
-        vm.expectRevert(TickTockHook.NotPoolManager.selector);
+        vm.expectRevert(TickTockState.NotPoolManager.selector);
         hook.afterSwap(address(this), poolKey, IPoolManager.SwapParams(true, -1, 0), BalanceDelta.wrap(0), "");
     }
 
     function test_unlockCallbackOnlyFromPoolManager() public {
-        vm.expectRevert(TickTockHook.NotPoolManager.selector);
+        vm.expectRevert(TickTockState.NotPoolManager.selector);
         hook.unlockCallback("");
     }
 
     function test_implementationRefusesDirectCalls() public {
         TickTockHook implementation = TickTockHook(factory.implementation());
-        vm.expectRevert(TickTockHook.NotAClone.selector);
+        vm.expectRevert(TickTockState.NotAClone.selector);
         implementation.config();
 
         vm.prank(address(manager));
-        vm.expectRevert(TickTockHook.NotAClone.selector);
+        vm.expectRevert(TickTockState.NotAClone.selector);
         implementation.afterSwap(address(this), poolKey, IPoolManager.SwapParams(true, -1, 0), BalanceDelta.wrap(0), "");
     }
 
@@ -94,17 +95,17 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
         IPoolManager.SwapParams memory swapParams = IPoolManager.SwapParams(true, -1, 0);
         BalanceDelta zero = BalanceDelta.wrap(0);
 
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.afterInitialize(address(this), poolKey, 0, 0);
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.afterAddLiquidity(address(this), poolKey, params, zero, zero, "");
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.beforeRemoveLiquidity(address(this), poolKey, params, "");
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.afterRemoveLiquidity(address(this), poolKey, params, zero, zero, "");
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.beforeSwap(address(this), poolKey, swapParams, "");
-        vm.expectRevert(TickTockHook.HookNotImplemented.selector);
+        vm.expectRevert(TickTockState.HookNotImplemented.selector);
         hook.afterDonate(address(this), poolKey, 0, 0, "");
     }
 

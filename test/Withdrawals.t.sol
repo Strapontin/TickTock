@@ -8,6 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {OrderMath} from "../src/libraries/OrderMath.sol";
 import {TickTockHook} from "../src/TickTockHook.sol";
+import {TickTockState} from "../src/base/TickTockState.sol";
 import {TickTockTestBase} from "./utils/TickTockTestBase.sol";
 
 contract WithdrawalsTest is TickTockTestBase {
@@ -145,7 +146,7 @@ contract WithdrawalsTest is TickTockTestBase {
             // Too small to buy liquidity at that price, or too much for one tick.
             bytes4 selector = bytes4(reason);
             assertTrue(
-                selector == TickTockHook.ZeroLiquidity.selector || selector == TickTockHook.TooMuchLiquidity.selector
+                selector == TickTockState.ZeroLiquidity.selector || selector == TickTockState.TooMuchLiquidity.selector
                     || selector == Pool.TickLiquidityOverflow.selector,
                 "unexpected revert"
             );
@@ -156,19 +157,19 @@ contract WithdrawalsTest is TickTockTestBase {
         (uint64 groupId, uint256 shares) = _deposit(hook, poolKey, alice, 100, 0, true, 1e18);
 
         vm.startPrank(alice);
-        vm.expectRevert(TickTockHook.InsufficientShares.selector);
+        vm.expectRevert(TickTockState.InsufficientShares.selector);
         hook.withdraw(groupId, shares + 1, alice, block.timestamp);
-        vm.expectRevert(TickTockHook.ZeroShares.selector);
+        vm.expectRevert(TickTockState.ZeroShares.selector);
         hook.withdraw(groupId, 0, alice, block.timestamp);
-        vm.expectRevert(TickTockHook.InvalidRecipient.selector);
+        vm.expectRevert(TickTockState.InvalidRecipient.selector);
         hook.withdraw(groupId, shares, address(0), block.timestamp);
-        vm.expectRevert(TickTockHook.DeadlinePassed.selector);
+        vm.expectRevert(TickTockState.DeadlinePassed.selector);
         hook.withdraw(groupId, shares, alice, block.timestamp - 1);
         vm.stopPrank();
 
         // Someone else's shares.
         vm.prank(bob);
-        vm.expectRevert(TickTockHook.InsufficientShares.selector);
+        vm.expectRevert(TickTockState.InsufficientShares.selector);
         hook.withdraw(groupId, 1, bob, block.timestamp);
     }
 }
