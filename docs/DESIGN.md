@@ -98,7 +98,7 @@ function flipLevel(PoolKey calldata key, int24 level) external;        // one sk
 function movePrice(PoolKey calldata key, uint160 targetSqrtPrice) external; // through empty space only
 ```
 
-Views: `positionOf(user, groupId)` (current token amounts), `getLevel`, `getGroup`, `resolveGroup(groupId)` (follows a merge, see section 6).
+Views: `positionOf(user, groupId)` (current token amounts, fees not yet collected included), `getLevel`, `getGroup`, `getPool` (key and cursors), `slotGroup`, `resolveGroup(groupId)` (follows a merge, see section 6).
 
 **Reentrancy.** Every entry point, `afterSwap` included, takes a lock in transient storage and reverts if it's already held. Pairs can use any token, and the PoolManager stays unlocked during the hook's own calls. Without the lock, a token's `transferFrom` or an ETH recipient could call `swap` on a TickTock pool and run `afterSwap` halfway through a deposit. This doesn't conflict with the rule that `afterSwap` never reverts because of order state (section 5.2): the lock is only held inside the hook's own calls, so the only transaction it can make revert is the one that called the hook.
 
@@ -282,7 +282,7 @@ No minimum order size: skipping small levels handles dust without one. A minimum
 - **When orders fill**: an order fills once the market moves past it by enough to cover the bot's gas, including the flip. On mainnet that can mean brief touches of a level don't fill.
 - **Rounding dust** from splitting a flip between groups stays in the hook, unowned.
 - **v4 protocol fee**: Uniswap governance can switch on v4's protocol fee for any pool. It would come out of the LP fees TickTock users earn. Nothing else changes.
-- Solidity 0.8.26 exactly (v4-core's `PoolManager` pins it), `cancun` EVM (v4 uses transient storage).
+- Solidity 0.8.26 exactly (v4-core's `PoolManager` pins it), `cancun` EVM (v4 uses transient storage), 200 optimizer runs so the hook fits the 24 KB contract size limit.
 
 ## 11. Repository layout and test plan
 

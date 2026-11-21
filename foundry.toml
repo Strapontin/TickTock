@@ -8,8 +8,9 @@ solc = "0.8.26"
 evm_version = "cancun"
 via_ir = true
 optimizer = true
-# v4-core needs its own settings: lower runs hit "stack too deep" in Pool.swap.
-optimizer_runs = 44444444
+# 200 keeps the hook under the 24 KB size limit. v4's Pool.swap hits "stack too deep" at some
+# values (800 and 1000 do), so check PoolManager still compiles before changing this.
+optimizer_runs = 200
 bytecode_hash = "none"
 gas_limit = "300000000"
 remappings = [

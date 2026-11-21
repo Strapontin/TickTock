@@ -69,6 +69,22 @@ library OrderMath {
         return SqrtPriceMath.getAmount1Delta(sqrtLower, sqrtUpper, liquidity, roundUp);
     }
 
+    /// @notice The tokens held by `liquidity` over the range at a given price, rounded down as v4 does on removal.
+    function amountsForLiquidity(uint160 sqrtLower, uint160 sqrtUpper, uint160 sqrtPriceX96, uint128 liquidity)
+        internal
+        pure
+        returns (uint256 amount0, uint256 amount1)
+    {
+        if (sqrtPriceX96 <= sqrtLower) {
+            return (SqrtPriceMath.getAmount0Delta(sqrtLower, sqrtUpper, liquidity, false), 0);
+        }
+        if (sqrtPriceX96 >= sqrtUpper) {
+            return (0, SqrtPriceMath.getAmount1Delta(sqrtLower, sqrtUpper, liquidity, false));
+        }
+        amount0 = SqrtPriceMath.getAmount0Delta(sqrtPriceX96, sqrtUpper, liquidity, false);
+        amount1 = SqrtPriceMath.getAmount1Delta(sqrtLower, sqrtPriceX96, liquidity, false);
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
     // Values and sizes
     // ---------------------------------------------------------------------------------------------------------------

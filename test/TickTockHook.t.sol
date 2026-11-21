@@ -74,6 +74,11 @@ contract TickTockHookSkeletonTest is TickTockTestBase {
         hook.afterSwap(address(this), poolKey, IPoolManager.SwapParams(true, -1, 0), BalanceDelta.wrap(0), "");
     }
 
+    function test_unlockCallbackOnlyFromPoolManager() public {
+        vm.expectRevert(TickTockHook.NotPoolManager.selector);
+        hook.unlockCallback("");
+    }
+
     function test_implementationRefusesDirectCalls() public {
         TickTockHook implementation = TickTockHook(factory.implementation());
         vm.expectRevert(TickTockHook.NotAClone.selector);
