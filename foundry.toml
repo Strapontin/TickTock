@@ -1,0 +1,33 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+via_ir = true
+optimizer = true
+# v4-core needs its own settings: lower runs hit "stack too deep" in Pool.swap.
+optimizer_runs = 44444444
+bytecode_hash = "none"
+gas_limit = "300000000"
+remappings = [
+    "@uniswap/v4-core/=lib/v4-core/",
+    "forge-std/=lib/forge-std/src/",
+    "solady/=lib/solady/src/",
+    "solmate/=lib/v4-core/lib/solmate/",
+]
+
+[profile.default.fuzz]
+runs = 1000
+
+[profile.default.invariant]
+runs = 256
+depth = 64
+
+[profile.ci.fuzz]
+runs = 10000
+
+[fmt]
+line_length = 120
