@@ -13,7 +13,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | # | Step | Status |
 |---|---|---|
 | 0 | Setup | Done |
-| 1 | Libraries | To do |
+| 1 | Libraries | Done |
 | 2 | Factory and hook skeleton | To do |
 | 3 | Deposits, withdrawals and fees | To do |
 | 4 | Flips and merges | To do |
