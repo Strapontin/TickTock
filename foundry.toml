@@ -31,3 +31,9 @@ runs = 10000
 
 [fmt]
 line_length = 120
+
+[lint]
+# Tests and scripts cast bounded fuzz inputs on purpose.
+ignore = ["test/**/*.sol", "script/**/*.sol"]
+# `poolManager` follows the v4 hook convention and is part of the public API.
+exclude_lints = ["screaming-snake-case-immutable", "asm-keccak256"]

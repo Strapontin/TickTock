@@ -289,9 +289,11 @@ No minimum order size: skipping small levels handles dust without one. A minimum
 ```
 src/TickTockFactory.sol
 src/TickTockHook.sol
+src/libraries/HookConfig.sol      config validation and its encoding as clone args
 src/libraries/LevelBitmap.sol     compressed bitmap with next-level search
 src/libraries/OrderMath.sol       one-tick liquidity and amounts, sizes, values, fill fractions
 test/                             Foundry tests, v4 deployed locally
+script/HookSaltMiner.sol          salt search, shared by the script and the tests
 script/MineSalt.s.sol             finds a salt for a config
 script/Deploy.s.sol               factory, then a config hook
 ```
