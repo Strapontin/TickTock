@@ -33,6 +33,9 @@ abstract contract TickTockState {
         /// @dev Bit k is set when the ask (or bid) slot for spread k at this level holds a group.
         uint8 askMask;
         uint8 bidMask;
+        /// @dev Set the first time the level holds a group, never cleared. It keeps the word non-zero once the level
+        /// empties, so the next round trip through it writes a used word instead of a fresh one.
+        bool used;
         /// @dev Fees per unit of the level's liquidity, as in v4. Wraps on overflow.
         uint256 feeGrowth0X128;
         uint256 feeGrowth1X128;
@@ -70,9 +73,6 @@ abstract contract TickTockState {
     // Constants, immutables and storage
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// @dev Slot indices in `_slotGroups`: asks use `k`, bids use `BID_SLOTS + k`.
-    uint256 internal constant BID_SLOTS = 8;
-
     /// @notice v4's liquidity limit per tick with tick spacing 1: `type(uint128).max / numTicks`, where
     /// `numTicks = MAX_TICK - MIN_TICK + 1`.
     uint256 public constant MAX_TICK_LIQUIDITY = type(uint128).max / 1_774_545;
@@ -88,7 +88,10 @@ abstract contract TickTockState {
 
     mapping(PoolId => PoolState) internal _pools;
     mapping(PoolId => mapping(int24 level => Level)) internal _levels;
-    mapping(PoolId => mapping(int24 level => uint64[16])) internal _slotGroups;
+    /// @dev The groups in each strategy's two slots, by sell level: index `2k` is the ask slot at the sell level,
+    /// `2k + 1` the bid slot at `sellLevel - spreads[k]`. Both slots of a strategy share a storage word, so a flip
+    /// between them rewrites one word instead of writing a fresh one.
+    mapping(PoolId => mapping(int24 sellLevel => uint64[16])) internal _strategyGroups;
     mapping(PoolId => mapping(int16 => uint256)) internal _askBitmap;
     mapping(PoolId => mapping(int16 => uint256)) internal _bidBitmap;
     mapping(uint64 groupId => Group) internal _groups;
@@ -195,20 +198,24 @@ abstract contract TickTockState {
         );
         if (liquidityBefore != 0) {
             // Fees are never negative. Growth wraps on overflow, as in v4.
+            uint256 fees0 = uint256(int256(fees.amount0()));
+            uint256 fees1 = uint256(int256(fees.amount1()));
             unchecked {
-                level.feeGrowth0X128 += FullMath.mulDiv(
-                    uint256(int256(fees.amount0())), FixedPoint128.Q128, liquidityBefore
-                );
-                level.feeGrowth1X128 += FullMath.mulDiv(
-                    uint256(int256(fees.amount1())), FixedPoint128.Q128, liquidityBefore
-                );
+                if (fees0 != 0) level.feeGrowth0X128 += FullMath.mulDiv(fees0, FixedPoint128.Q128, liquidityBefore);
+                if (fees1 != 0) level.feeGrowth1X128 += FullMath.mulDiv(fees1, FixedPoint128.Q128, liquidityBefore);
             }
         }
         principal = callerDelta - fees;
     }
 
-    /// @dev Credits a group the fees its liquidity earned at its level since it was last credited.
+    /// @dev Credits a group the fees its liquidity earned at its level since it was last credited, and moves its
+    /// snapshot to the level's current growth.
     function _creditFees(Group storage g, Level storage level) internal {
+        _creditFees(g, level, true);
+    }
+
+    /// @param snapshot False when the group is leaving the level and its snapshot is about to be overwritten.
+    function _creditFees(Group storage g, Level storage level, bool snapshot) internal {
         uint256 growth0 = level.feeGrowth0X128;
         uint256 growth1 = level.feeGrowth1X128;
         uint256 liquidity = g.liquidity;
@@ -223,8 +230,15 @@ abstract contract TickTockState {
             g.pending0 += FullMath.mulDiv(delta0, liquidity, FixedPoint128.Q128).toUint128();
             g.pending1 += FullMath.mulDiv(delta1, liquidity, FixedPoint128.Q128).toUint128();
         }
-        g.feeGrowthLast0X128 = growth0;
-        g.feeGrowthLast1X128 = growth1;
+        if (snapshot) {
+            g.feeGrowthLast0X128 = growth0;
+            g.feeGrowthLast1X128 = growth1;
+        }
+    }
+
+    /// @dev Where a slot's group id lives in its strategy's word.
+    function _slotIndex(uint8 k, bool isBid) internal pure returns (uint256) {
+        return 2 * uint256(k) + (isBid ? 1 : 0);
     }
 
     /// @dev Marks a slot as holding a group, and the level as holding that side.
@@ -240,5 +254,6 @@ abstract contract TickTockState {
             if (level.askMask == 0) _askBitmap[poolId].set(levelTick, spacing);
             level.askMask |= bit;
         }
+        level.used = true;
     }
 }

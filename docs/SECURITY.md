@@ -86,4 +86,4 @@ These are in DESIGN.md sections 9 and 10:
 - **The free option** on crossed but unflipped levels: users can lose the trade, never funds.
 - **A price pushed far into empty space** makes the next swap toward the orders expensive.
 - **v4's per-tick limit** is reachable with high-supply tokens on both sides.
-- **Flip gas** is about 300k to 350k per level with one spread, before step 8's optimizations.
+- **Flip gas**: up to about 230k per liquidity operation into a fresh level, so a swap's worst case is about `230k × maxOpsPerSwap` (DESIGN.md section 12).

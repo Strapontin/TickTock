@@ -182,16 +182,18 @@ contract TickTockEngine is TickTockState {
             _askBitmap[poolId].clear(levelTick, cfg.levelSpacing);
         }
 
-        uint64[16] storage slots = _slotGroups[poolId][levelTick];
         for (uint8 k = 0; k < cfg.spreadCount; ++k) {
             // forge-lint: disable-next-line(incorrect-shift)
             if (mask & (1 << k) == 0) continue;
-            uint256 index = (bids ? BID_SLOTS : 0) + k;
-            uint64 groupId = slots[index];
-            slots[index] = 0;
+            int24 sellLevel = bids ? levelTick + cfg.spreads[k] : levelTick;
+            uint64[16] storage strategy = _strategyGroups[poolId][sellLevel];
+            uint256 index = _slotIndex(k, bids);
+            uint64 groupId = strategy[index];
+            strategy[index] = 0;
 
             Group storage g = _groups[groupId];
-            _creditFees(g, level);
+            // The snapshot moves to the destination level in `_place`.
+            _creditFees(g, level, false);
             uint256 amount = sideLiquidity == 0 ? 0 : FullMath.mulDiv(principal, g.liquidity, sideLiquidity);
             uint256 rest = unsold == 0 ? 0 : FullMath.mulDiv(unsold, g.liquidity, sideLiquidity);
             g.liquidity = 0;
@@ -204,8 +206,8 @@ contract TickTockEngine is TickTockState {
                 g.pending1 = 0;
                 g.pending0 += rest.toUint128();
             }
-            int24 destination = bids ? levelTick + cfg.spreads[k] : levelTick - cfg.spreads[k];
-            ops += _place(key, poolId, cfg.levelSpacing, destination, !bids, k, groupId, amount);
+            int24 destination = bids ? sellLevel : levelTick - cfg.spreads[k];
+            ops += _place(key, poolId, cfg.levelSpacing, sellLevel, destination, !bids, k, groupId, amount);
         }
         emit LevelFlipped(poolId, levelTick, bids, sideLiquidity, unsold != 0);
     }
@@ -218,6 +220,7 @@ contract TickTockEngine is TickTockState {
         PoolKey memory key,
         PoolId poolId,
         int24 spacing,
+        int24 sellLevel,
         int24 destination,
         bool isBid,
         uint8 k,
@@ -225,8 +228,9 @@ contract TickTockEngine is TickTockState {
         uint256 amount
     ) internal returns (uint256 ops) {
         Level storage level = _levels[poolId][destination];
-        uint256 index = (isBid ? BID_SLOTS : 0) + k;
-        uint64 waitingId = _slotGroups[poolId][destination][index];
+        uint64[16] storage strategy = _strategyGroups[poolId][sellLevel];
+        uint256 index = _slotIndex(k, isBid);
+        uint64 waitingId = strategy[index];
 
         Placement memory pl;
         (pl.sqrtLower, pl.sqrtUpper) = OrderMath.bounds(destination);
@@ -240,7 +244,7 @@ contract TickTockEngine is TickTockState {
         uint256 wanted = isBid
             ? OrderMath.liquidityForAmount1(pl.sqrtLower, pl.sqrtUpper, total, false)
             : OrderMath.liquidityForAmount0(pl.sqrtLower, pl.sqrtUpper, total, false);
-        uint256 room = _tickRoom(poolId, destination);
+        uint256 room = _tickRoom(poolId, level, destination, spacing);
         pl.liquidity = wanted < room ? wanted : room;
         uint256 used;
         if (pl.liquidity != 0) {
@@ -259,11 +263,10 @@ contract TickTockEngine is TickTockState {
             g.isBid = isBid;
             g.feeGrowthLast0X128 = level.feeGrowth0X128;
             g.feeGrowthLast1X128 = level.feeGrowth1X128;
-            _slotGroups[poolId][destination][index] = groupId;
+            strategy[index] = groupId;
             _addToMask(poolId, level, destination, spacing, isBid, k);
         } else {
-            uint64 survivor = _merge(level, pl, isBid, groupId, waitingId);
-            _slotGroups[poolId][destination][index] = survivor;
+            strategy[index] = _merge(level, pl, isBid, groupId, waitingId);
         }
         // The level's position is under v4's per-tick limit, below 2^108, so the sum fits.
         if (isBid) level.bidLiquidity += uint112(pl.liquidity);
@@ -334,10 +337,21 @@ contract TickTockEngine is TickTockState {
     }
 
     /// @dev How much liquidity a level's position can still add under v4's per-tick limit, at both of its ticks.
-    function _tickRoom(PoolId poolId, int24 levelTick) internal view returns (uint256) {
-        (uint128 lowerGross,) = poolManager.getTickLiquidity(poolId, levelTick);
-        (uint128 upperGross,) = poolManager.getTickLiquidity(poolId, levelTick + 1);
-        uint256 gross = lowerGross > upperGross ? lowerGross : upperGross;
+    /// Only the hook provides liquidity, so with a level spacing above 1, where no two levels share a tick, the
+    /// level's own liquidity is exactly what its ticks hold. With spacing 1, neighbors share ticks: ask v4.
+    function _tickRoom(PoolId poolId, Level storage level, int24 levelTick, int24 spacing)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 gross;
+        if (spacing > 1) {
+            gross = uint256(level.askLiquidity) + level.bidLiquidity;
+        } else {
+            (uint128 lowerGross,) = poolManager.getTickLiquidity(poolId, levelTick);
+            (uint128 upperGross,) = poolManager.getTickLiquidity(poolId, levelTick + 1);
+            gross = lowerGross > upperGross ? lowerGross : upperGross;
+        }
         return gross >= MAX_TICK_LIQUIDITY ? 0 : MAX_TICK_LIQUIDITY - gross;
     }
 }

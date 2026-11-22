@@ -292,8 +292,15 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
     }
 
     /// @notice The group in a slot, or 0 if the slot is empty.
-    function slotGroup(PoolId poolId, int24 level, bool isBid, uint8 spreadIndex) external view returns (uint64) {
-        return _slotGroups[poolId][level][(isBid ? BID_SLOTS : 0) + spreadIndex];
+    /// @param level The slot's level: the sell level for an ask, the sell level minus the spread for a bid.
+    function slotGroup(PoolId poolId, int24 level, bool isBid, uint8 spreadIndex)
+        external
+        view
+        onlyClone
+        returns (uint64)
+    {
+        int24 sellLevel = isBid ? level + _config().spreads[spreadIndex] : level;
+        return _strategyGroups[poolId][sellLevel][_slotIndex(spreadIndex, isBid)];
     }
 
     /// @notice The live group holding a group's shares: itself, or the group that absorbed it.
@@ -489,8 +496,9 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         Level storage level = _levels[poolId][p.level];
         BalanceDelta principal = _modifyLevel(p.key, level, p.level, r.liquidity.toInt256());
 
-        uint256 slotIndex = (p.isBid ? BID_SLOTS : 0) + p.spreadIndex;
-        r.groupId = _slotGroups[poolId][p.level][slotIndex];
+        uint64[16] storage strategy = _strategyGroups[poolId][p.sellLevel];
+        uint256 slotIndex = _slotIndex(p.spreadIndex, p.isBid);
+        r.groupId = strategy[slotIndex];
         Group storage g;
         if (r.groupId == 0) {
             r.groupId = ++lastGroupId;
@@ -501,7 +509,7 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
             g.isBid = p.isBid;
             g.feeGrowthLast0X128 = level.feeGrowth0X128;
             g.feeGrowthLast1X128 = level.feeGrowth1X128;
-            _slotGroups[poolId][p.level][slotIndex] = r.groupId;
+            strategy[slotIndex] = r.groupId;
             _addToMask(poolId, level, p.level, p.levelSpacing, p.isBid, p.spreadIndex);
         } else {
             g = _groups[r.groupId];
@@ -722,12 +730,11 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         uint8 k = g.spreadIndex;
         // forge-lint: disable-next-line(incorrect-shift)
         uint8 bit = uint8(1 << k);
+        _strategyGroups[poolId][g.sellLevel][_slotIndex(k, g.isBid)] = 0;
         if (g.isBid) {
-            _slotGroups[poolId][levelTick][BID_SLOTS + k] = 0;
             level.bidMask &= ~bit;
             if (level.bidMask == 0) _bidBitmap[poolId].clear(levelTick, spacing);
         } else {
-            _slotGroups[poolId][levelTick][k] = 0;
             level.askMask &= ~bit;
             if (level.askMask == 0) _askBitmap[poolId].clear(levelTick, spacing);
         }

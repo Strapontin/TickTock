@@ -20,7 +20,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | 5 | Swaps: budget, skipping and cursors | Done |
 | 6 | Partial flips | Done |
 | 7 | Hardening | Done |
-| 8 | Gas and deployment | To do |
+| 8 | Gas and deployment | Done |
 
 ### 0. Setup
 
@@ -105,12 +105,16 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 
 ### 8. Gas and deployment
 
-- Starting point, measured after step 5 with the test PoolManager: a swap that crosses no level costs about 52k gas, and each flipped level with one spread adds roughly 300k to 350k, mostly first writes to fresh storage (groups, levels, slots, v4 ticks). A swap flipping 12 such levels used about 4.5M gas.
-- The worst-case swap, measured with every slot full until the budget runs out.
-- Gas snapshots.
-- Tuning `skipDivisor` and the partial-flip threshold.
-- `script/Deploy.s.sol`.
-- README usage section.
+- Gas tests for every main operation, recorded in `snapshots/TickTock.json`, including the worst case: the budget spent on 8-spread levels flipping into fresh destinations.
+- Five storage optimizations, saving 4% to 21% depending on the operation (14% on the worst case):
+  - Both slots of a strategy share one storage word.
+  - Each level keeps a `used` bit, so reused levels write a used word.
+  - No fee snapshot written on the source level of a flip.
+  - The per-tick limit check reads the hook's own storage when levels don't share ticks.
+  - No fee growth update for a token with no fees.
+- What's left is mostly v4 initializing fresh ticks and positions: about 170k of the roughly 230k per operation in the worst case.
+- `maxOpsPerSwap`: 9 on mainnet, 24 on L2s (DESIGN.md section 12). `skipDivisor` and the partial-flip threshold keep their starting values.
+- `script/Deploy.s.sol`, tested end to end, and a README usage section.
 
 ## After the plan
 

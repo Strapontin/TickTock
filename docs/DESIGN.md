@@ -130,7 +130,7 @@ Pool creation shows up as v4's own `Initialize` event, which includes the hook a
 ## 4. Storage (per pool)
 
 ```
-Level  { uint112 askLiquidity; uint112 bidLiquidity; uint8 askMask; uint8 bidMask;   // one word
+Level  { uint112 askLiquidity; uint112 bidLiquidity; uint8 askMask; uint8 bidMask; bool used;   // one word
          uint256 feeGrowth0X128; uint256 feeGrowth1X128; }
 Group  { uint128 liquidity; uint128 pending0; uint128 pending1;
          uint256 totalShares; uint256 feeGrowthLast0X128; uint256 feeGrowthLast1X128;
@@ -138,7 +138,8 @@ Group  { uint128 liquidity; uint128 pending0; uint128 pending1;
          uint64 mergedInto; uint256 mergedShares; }
 
 levels[poolId][L]                 -> Level
-slotGroup[poolId][L][side, k]     -> groupId  (16 uint64 per level, 4 per storage word)
+strategyGroups[poolId][S][2k]     -> groupId in the ask slot of strategy (S, k)
+strategyGroups[poolId][S][2k+1]   -> groupId in its bid slot   (16 uint64 per sell level, 4 per word)
 groups[groupId]                   -> Group    (ids only increase, so a lower id is an older group)
 shares[user][groupId]             -> uint256
 askBitmap[poolId], bidBitmap[poolId]   levels holding ask or bid slots, compressed by levelSpacing
@@ -151,6 +152,8 @@ poolKeys[poolId]                  -> PoolKey
 - The masks record which spreads have a group in a slot at that level. That way a flip only visits the slots that exist. A level's bit in a bitmap stays set while that side has a group, even one with zero liquidity (section 10).
 - `pending0` and `pending1` are tokens owned by a group but not inside a position: fees, the unsold remainder of a partial flip (section 5.4), and amounts that couldn't be placed (section 10). The hook holds them as ERC-6909 claims on the PoolManager.
 - `mergedInto` and `mergedShares` are only set on an absorbed group (section 6). Its `totalShares` is then frozen.
+- Group ids are stored by strategy rather than by level, so both slots of a strategy share a storage word. A flip between them rewrites that word instead of clearing one slot and writing a fresh one.
+- `used` is set the first time a level holds a group and never cleared. It keeps the level's word non-zero after the level empties, so the next round trip through it writes a used word instead of a fresh one.
 
 ## 5. Swaps and flips
 
@@ -343,11 +346,21 @@ Tests:
   - Withdrawals never revert for a valid position.
   - `afterSwap` never reverts.
 
-## 12. Parameters to tune with the gas tests
+## 12. Parameters
 
-| Parameter | Where | Starting value |
+| Parameter | Where | Value |
 |---|---|---|
-| `maxOpsPerSwap` | Factory, per chain | Measured; at least 9 |
-| `skipDivisor` | Hook constant | `2 × maxOpsPerSwap`, compared against the largest crossed level |
-| `partialFlipThreshold` | Hook constant | 90% |
-| Spreads per config | Hook constant | At most 8 |
+| `maxOpsPerSwap` | Factory, per chain | 9 on Ethereum mainnet, 24 on L2s (see below) |
+| `skipDivisor` | Hook | `2 × maxOpsPerSwap`, compared against the largest crossed level |
+| `PARTIAL_FLIP_THRESHOLD_BPS` | Hook constant | 9000 (90%) |
+| Spreads per config | `HookConfig` | At most 8 |
+
+`test/Gas.t.sol` measures the costs and records them in `snapshots/TickTock.json`. The test PoolManager is compiled with 200 optimizer runs instead of the deployed 44,444,444, so v4's share is slightly overstated.
+
+- A swap that crosses no level costs about 68k gas; one that stops inside a level, about 165k.
+- Each liquidity operation of a flip costs up to about 230k gas when its destination is a fresh level: v4 initializes the destination's two ticks and its position, about 170k of that. Destinations already holding liquidity cost far less: a level with 8 spreads merging into 8 waiting groups takes about 700k for 9 operations, against 2.2M into fresh levels.
+- So the worst case added to a swap is about `230k × maxOpsPerSwap`: about 2.1M gas at 9 and 5.5M at 24.
+
+9 is the floor (the busiest level must fit in one swap) and keeps the worst case near 2M gas on mainnet. On L2s, gas is cheap and transaction limits are higher, so 24 flips more crossed levels per swap and leaves fewer for keepers. Use the gas test's numbers to pick a different value for a specific chain.
+
+`skipDivisor` and the partial-flip threshold kept their starting values: the gas tests gave no reason to move them. Both are judgment calls about griefing rather than gas, and deployment data could justify tuning them in a later version.
