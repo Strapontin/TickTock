@@ -149,8 +149,10 @@ contract TickTockEngine is TickTockState {
         }
     }
 
-    /// @dev Flips one fully converted side of a level: removes its liquidity, then re-posts each group's share,
-    /// plus its pending tokens in the new token, at the opposite slot of its strategy (DESIGN.md section 5.2).
+    /// @dev Flips one converted side of a level: removes its liquidity, then re-posts each group's share, plus its
+    /// pending tokens in the new token, at the opposite slot of its strategy (DESIGN.md section 5.2). In a partial
+    /// flip (the price inside the level), the unsold part of each share goes to the group's pending tokens and is
+    /// re-posted when the group comes back to this side (section 5.4).
     /// @param bids True to flip the level's bids into asks, false to flip its asks into bids.
     /// @return ops The liquidity operations spent: one removal plus one addition per destination.
     function _flipSide(PoolKey memory key, PoolId poolId, HookConfig.Config memory cfg, int24 levelTick, bool bids)
@@ -161,12 +163,15 @@ contract TickTockEngine is TickTockState {
         (uint256 sideLiquidity, uint8 mask) =
             bids ? (uint256(level.bidLiquidity), level.bidMask) : (uint256(level.askLiquidity), level.askMask);
 
-        // The side is fully converted: asks into token1, bids into token0. The removal's fees accrue over the
-        // level's whole liquidity, before the side leaves it.
+        // Asks convert into token1 and bids into token0; `unsold` is the rest of a partial flip. The removal's fees
+        // accrue over the level's whole liquidity, before the side leaves it.
         uint256 principal;
+        uint256 unsold;
         if (sideLiquidity != 0) {
             BalanceDelta delta = _modifyLevel(key, level, levelTick, -sideLiquidity.toInt256());
-            principal = uint256(int256(bids ? delta.amount0() : delta.amount1()));
+            uint256 amount0 = uint256(int256(delta.amount0()));
+            uint256 amount1 = uint256(int256(delta.amount1()));
+            (principal, unsold) = bids ? (amount0, amount1) : (amount1, amount0);
             ops = 1;
         }
         if (bids) {
@@ -188,18 +193,21 @@ contract TickTockEngine is TickTockState {
             Group storage g = _groups[groupId];
             _creditFees(g, level);
             uint256 amount = sideLiquidity == 0 ? 0 : FullMath.mulDiv(principal, g.liquidity, sideLiquidity);
+            uint256 rest = unsold == 0 ? 0 : FullMath.mulDiv(unsold, g.liquidity, sideLiquidity);
             g.liquidity = 0;
             if (bids) {
                 amount += g.pending0;
                 g.pending0 = 0;
+                g.pending1 += rest.toUint128();
             } else {
                 amount += g.pending1;
                 g.pending1 = 0;
+                g.pending0 += rest.toUint128();
             }
             int24 destination = bids ? levelTick + cfg.spreads[k] : levelTick - cfg.spreads[k];
             ops += _place(key, poolId, cfg.levelSpacing, destination, !bids, k, groupId, amount);
         }
-        emit LevelFlipped(poolId, levelTick, bids, sideLiquidity, false);
+        emit LevelFlipped(poolId, levelTick, bids, sideLiquidity, unsold != 0);
     }
 
     /// @dev Places a flipped group in its destination slot, merging it with the group already there if any.

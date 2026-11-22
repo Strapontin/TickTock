@@ -75,6 +75,10 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         address recipient;
     }
 
+    /// @notice The share of a level's starting token that must be sold before `flipLevel` flips it with the price
+    /// still inside it (DESIGN.md section 5.4).
+    uint256 public constant PARTIAL_FLIP_THRESHOLD_BPS = 9000;
+
     /// @notice The most liquidity operations one swap's `afterSwap` may spend.
     uint16 public immutable maxOpsPerSwap;
 
@@ -215,8 +219,9 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         poolManager.unlock(abi.encode(Action.MovePrice, abi.encode(key, targetSqrtPriceX96)));
     }
 
-    /// @notice Flips a level whose orders are fully crossed but weren't flipped by a swap: a skipped level, or one
-    /// the swap budget didn't reach (DESIGN.md section 5.4). Anyone can call it.
+    /// @notice Flips a level whose orders weren't flipped by a swap (DESIGN.md section 5.4): a fully crossed level
+    /// that was skipped or that the swap budget didn't reach, or a level the price stopped inside once at least
+    /// `PARTIAL_FLIP_THRESHOLD_BPS` of it was sold. Anyone can call it.
     function flipLevel(PoolKey calldata key, int24 level) external onlyClone nonReentrant {
         if (_pools[key.toId()].currency1.isAddressZero()) revert PoolNotFound();
         poolManager.unlock(abi.encode(Action.FlipLevel, abi.encode(key, level)));
@@ -240,7 +245,7 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         }
         if (action == Action.FlipLevel) {
             (PoolKey memory flipKey, int24 levelTick) = abi.decode(payload, (PoolKey, int24));
-            if (_flipIfCrossed(flipKey, flipKey.toId(), _config(), levelTick) == 0) revert NothingToFlip();
+            if (_flipIfCrossed(flipKey, flipKey.toId(), _config(), levelTick, true) == 0) revert NothingToFlip();
             _settleDeltas(flipKey.currency0);
             _settleDeltas(flipKey.currency1);
             return "";
@@ -466,7 +471,7 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
             });
         } else {
             // A crossed target level is flipped first, so its orders get their trade (DESIGN.md section 7, step 3).
-            _flipIfCrossed(p.key, poolId, _config(), p.level);
+            _flipIfCrossed(p.key, poolId, _config(), p.level, false);
             bool insideLevel = sqrtPriceX96 > sqrtLower && sqrtPriceX96 < sqrtUpper;
             if (p.isBid && sqrtPriceX96 < sqrtUpper) _movePrice(p.key, pool, sqrtPriceX96, sqrtUpper, insideLevel);
             if (!p.isBid && sqrtPriceX96 > sqrtLower) _movePrice(p.key, pool, sqrtPriceX96, sqrtLower, insideLevel);
@@ -581,10 +586,15 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
 
     /// @dev Flips whichever side of a level is fully crossed, if either is.
     /// @return ops The liquidity operations spent, 0 if nothing flipped.
-    function _flipIfCrossed(PoolKey memory key, PoolId poolId, HookConfig.Config memory cfg, int24 levelTick)
-        internal
-        returns (uint256 ops)
-    {
+    /// @param allowPartial Also flip a side the price is inside, once it sold at least `PARTIAL_FLIP_THRESHOLD_BPS`
+    /// of its starting token (DESIGN.md section 5.4). Only `flipLevel` allows it.
+    function _flipIfCrossed(
+        PoolKey memory key,
+        PoolId poolId,
+        HookConfig.Config memory cfg,
+        int24 levelTick,
+        bool allowPartial
+    ) internal returns (uint256 ops) {
         if (levelTick % cfg.levelSpacing != 0) return 0;
         Level storage level = _levels[poolId][levelTick];
         if (level.askMask == 0 && level.bidMask == 0) return 0;
@@ -592,6 +602,17 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         (, int24 highestCrossedAsk, int24 lowestCrossedBid) = OrderMath.crossings(sqrtPriceX96, tick);
         if (level.askMask != 0 && levelTick <= highestCrossedAsk) return _engineFlip(key, levelTick, false);
         if (level.bidMask != 0 && levelTick >= lowestCrossedBid) return _engineFlip(key, levelTick, true);
+        if (!allowPartial) return 0;
+
+        // The price is inside the level, or the level is on the far side of it for both sides.
+        (uint160 sqrtLower, uint160 sqrtUpper) = OrderMath.bounds(levelTick);
+        if (sqrtPriceX96 <= sqrtLower || sqrtPriceX96 >= sqrtUpper) return 0;
+        if (
+            level.askMask != 0 && OrderMath.askSoldBps(sqrtLower, sqrtUpper, sqrtPriceX96) >= PARTIAL_FLIP_THRESHOLD_BPS
+        ) return _engineFlip(key, levelTick, false);
+        if (
+            level.bidMask != 0 && OrderMath.bidSoldBps(sqrtLower, sqrtUpper, sqrtPriceX96) >= PARTIAL_FLIP_THRESHOLD_BPS
+        ) return _engineFlip(key, levelTick, true);
         return 0;
     }
 

@@ -215,6 +215,7 @@ A bot can stop its swap just before the end of the last level, filling 99.99% of
 - If the price is inside the level, it flips once at least `partialFlipThreshold` of the level's starting token has been sold. That threshold starts at 90% and will be tuned in tests.
   - The unsold remainder goes to each group's pending tokens and is re-posted when the group comes back to that side.
 - A bot that stops before the threshold to dodge this gives up the rest of that level's trade. That's only worth it on tiny levels.
+- Only `flipLevel` flips a partly filled level. Swaps never do, and a deposit into one reverts with `LevelInRange`.
 
 ## 6. Shares and merges
 

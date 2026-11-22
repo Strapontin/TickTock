@@ -18,7 +18,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | 3 | Deposits, withdrawals and fees | Done |
 | 4 | Flips and merges | Done |
 | 5 | Swaps: budget, skipping and cursors | Done |
-| 6 | Partial flips | To do |
+| 6 | Partial flips | Done |
 | 7 | Hardening | To do |
 | 8 | Gas and deployment | To do |
 

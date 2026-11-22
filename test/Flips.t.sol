@@ -189,7 +189,7 @@ contract FlipsTest is TickTockTestBase {
         // Not crossed: the price is at the ask's lower edge.
         vm.expectRevert(TickTockState.NothingToFlip.selector);
         _flip(100);
-        // Inside the level: partial flips come later.
+        // Inside the level, half sold: below the partial-flip threshold.
         (uint160 lower, uint160 upper) = OrderMath.bounds(100);
         _swapTo(poolKey, lower + (upper - lower) / 2);
         vm.expectRevert(TickTockState.NothingToFlip.selector);
