@@ -43,7 +43,8 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         Deposit,
         Withdraw,
         MovePrice,
-        FlipLevel
+        FlipLevel,
+        FlipCrossed
     }
 
     struct DepositParams {
@@ -221,6 +222,14 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         poolManager.unlock(abi.encode(Action.FlipLevel, abi.encode(key, level)));
     }
 
+    /// @notice Flips crossed levels the swap budget didn't reach, on both sides, within `maxOps` liquidity
+    /// operations (DESIGN.md section 5.3). Anyone can call it.
+    /// @return ops The liquidity operations spent.
+    function flipCrossed(PoolKey calldata key, uint256 maxOps) external onlyClone nonReentrant returns (uint256 ops) {
+        if (_pools[key.toId()].currency1.isAddressZero()) revert PoolNotFound();
+        return abi.decode(poolManager.unlock(abi.encode(Action.FlipCrossed, abi.encode(key, maxOps))), (uint256));
+    }
+
     /// @inheritdoc IUnlockCallback
     function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
         (Action action, bytes memory payload) = abi.decode(data, (Action, bytes));
@@ -235,6 +244,14 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
             _settleDeltas(flipKey.currency0);
             _settleDeltas(flipKey.currency1);
             return "";
+        }
+        if (action == Action.FlipCrossed) {
+            (PoolKey memory scanKey, uint256 maxOps) = abi.decode(payload, (PoolKey, uint256));
+            uint256 ops = _engineScan(scanKey, true, maxOps);
+            ops += _engineScan(scanKey, false, maxOps - ops);
+            _settleDeltas(scanKey.currency0);
+            _settleDeltas(scanKey.currency1);
+            return abi.encode(ops);
         }
         (PoolKey memory key, uint160 target) = abi.decode(payload, (PoolKey, uint160));
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
@@ -335,14 +352,39 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
     }
 
     /// @inheritdoc IHooks
-    /// @dev Flips arrive in a later step. Until then, crossed levels stay as they are.
-    function afterSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata)
-        external
-        onlyClone
-        onlyPoolManager
-        nonReentrant
-        returns (bytes4, int128)
-    {
+    /// @dev Flips the levels the swap fully crossed, within the swap budget (DESIGN.md section 5.3). Never reverts
+    /// because of order state: what it can't do is left for later swaps, `flipCrossed` or `flipLevel`.
+    function afterSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta,
+        bytes calldata
+    ) external onlyClone onlyPoolManager nonReentrant returns (bytes4, int128) {
+        bool up = !params.zeroForOne;
+        PoolId poolId = key.toId();
+        PoolState storage pool = _pools[poolId];
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolId);
+        (int24 t, int24 highestCrossedAsk, int24 lowestCrossedBid) = OrderMath.crossings(sqrtPriceX96, tick);
+
+        // Most swaps cross no level fully. Checking the bitmap here spares them the engine call.
+        int24 spacing = _config().levelSpacing;
+        bool crossed;
+        if (up) (, crossed) = _askBitmap[poolId].nextUp(pool.askCursor, highestCrossedAsk, spacing);
+        else (, crossed) = _bidBitmap[poolId].nextDown(pool.bidCursor, lowestCrossedBid, spacing);
+
+        if (crossed) {
+            _engineScan(key, up, maxOpsPerSwap);
+            _settleDeltas(key.currency0);
+            _settleDeltas(key.currency1);
+        } else if (up) {
+            // Nothing to flip: the same cursor updates as a full scan.
+            pool.askCursor = t;
+            if (t > pool.bidCursor) pool.bidCursor = t;
+        } else {
+            pool.bidCursor = t;
+            if (t < pool.askCursor) pool.askCursor = t;
+        }
         return (IHooks.afterSwap.selector, 0);
     }
 
@@ -554,9 +596,19 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
     }
 
     /// @dev Runs `TickTockEngine.flipSide` on this hook's storage.
-    function _engineFlip(PoolKey memory key, int24 levelTick, bool bids) internal returns (uint256 ops) {
-        (bool success, bytes memory result) =
-            engine.delegatecall(abi.encodeCall(TickTockEngine.flipSide, (key, levelTick, bids)));
+    function _engineFlip(PoolKey memory key, int24 levelTick, bool bids) internal returns (uint256) {
+        return _engineCall(abi.encodeCall(TickTockEngine.flipSide, (key, levelTick, bids)));
+    }
+
+    /// @dev Runs `TickTockEngine.scan` on this hook's storage. Levels skipped as small are those below
+    /// `1 / (2 * maxOpsPerSwap)` of the largest crossed level (DESIGN.md section 5.3).
+    function _engineScan(PoolKey memory key, bool asks, uint256 budget) internal returns (uint256) {
+        return _engineCall(abi.encodeCall(TickTockEngine.scan, (key, asks, budget, 2 * uint256(maxOpsPerSwap))));
+    }
+
+    /// @dev Delegates to the engine and returns the liquidity operations it spent, bubbling up any revert.
+    function _engineCall(bytes memory data) internal returns (uint256) {
+        (bool success, bytes memory result) = engine.delegatecall(data);
         if (!success) {
             assembly ("memory-safe") {
                 revert(add(result, 0x20), mload(result))

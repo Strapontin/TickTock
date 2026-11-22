@@ -27,10 +27,12 @@ contract FeesTest is TickTockTestBase {
         _fund(bob, hook);
     }
 
-    /// The price crosses the level up and comes back: the swaps pay fees in token1, then token0.
+    /// The price goes 99% of the way through the level and comes back, so nothing flips: the swaps pay fees in
+    /// token1, then token0.
     function _roundTrip() internal returns (uint256 input1, uint256 input0) {
-        BalanceDelta up = _swapToTick(poolKey, LEVEL + 1);
-        BalanceDelta down = _swapToTick(poolKey, LEVEL);
+        (uint160 lower, uint160 upper) = OrderMath.bounds(LEVEL);
+        BalanceDelta up = _swapTo(poolKey, upper - (upper - lower) / 100);
+        BalanceDelta down = _swapTo(poolKey, lower);
         input1 = uint256(int256(-up.amount1()));
         input0 = uint256(int256(-down.amount0()));
     }

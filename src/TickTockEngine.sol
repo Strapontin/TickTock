@@ -5,6 +5,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -44,11 +45,108 @@ contract TickTockEngine is TickTockState {
         _self = address(this);
     }
 
+    /// @notice Flips the crossed levels on one side, in price order from that side's cursor, within a budget of
+    /// liquidity operations, then updates both cursors (DESIGN.md section 5.3).
+    /// @param asks True to scan asks (the price rose), false to scan bids (it fell).
+    /// @param budget The most liquidity operations to spend. A level is flipped completely or not at all.
+    /// @param skipDivisor A level is skipped when its size times this is below the largest crossed level's size.
+    /// @return spent The liquidity operations spent.
+    function scan(PoolKey calldata key, bool asks, uint256 budget, uint256 skipDivisor)
+        external
+        returns (uint256 spent)
+    {
+        if (address(this) == _self) revert NotDelegateCall();
+        PoolId poolId = key.toId();
+        PoolState storage pool = _pools[poolId];
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolId);
+        (int24 t, int24 highestCrossedAsk, int24 lowestCrossedBid) = OrderMath.crossings(sqrtPriceX96, tick);
+
+        bool stopped;
+        int24 stopLevel;
+        if (asks) {
+            (spent, stopped, stopLevel) =
+                _scanSide(key, poolId, false, pool.askCursor, highestCrossedAsk, budget, skipDivisor);
+            pool.askCursor = stopped ? stopLevel : t;
+            if (t > pool.bidCursor) pool.bidCursor = t;
+        } else {
+            (spent, stopped, stopLevel) =
+                _scanSide(key, poolId, true, pool.bidCursor, lowestCrossedBid, budget, skipDivisor);
+            pool.bidCursor = stopped ? stopLevel : t;
+            if (t < pool.askCursor) pool.askCursor = t;
+        }
+    }
+
     /// @notice Flips one fully crossed side of a level. The hook checks that the side is crossed first.
     /// @return ops The liquidity operations spent.
     function flipSide(PoolKey calldata key, int24 levelTick, bool bids) external returns (uint256 ops) {
         if (address(this) == _self) revert NotDelegateCall();
         return _flipSide(key, key.toId(), _config(), levelTick, bids);
+    }
+
+    /// @dev Scans the crossed levels of one side between `from` (the cursor) and `to` (the last crossed level).
+    /// The first pass only reads them to find the largest size; the second flips or skips them in price order and
+    /// stops at the first level the remaining budget can't flip completely.
+    /// @return spent The liquidity operations spent.
+    /// @return stopped Whether the budget ran out before the end of the range.
+    /// @return stopLevel The first level the budget didn't reach, when stopped.
+    function _scanSide(
+        PoolKey memory key,
+        PoolId poolId,
+        bool bids,
+        int24 from,
+        int24 to,
+        uint256 budget,
+        uint256 skipDivisor
+    ) internal returns (uint256 spent, bool stopped, int24 stopLevel) {
+        HookConfig.Config memory cfg = _config();
+        mapping(int16 => uint256) storage bitmap = bids ? _bidBitmap[poolId] : _askBitmap[poolId];
+
+        uint256 largest;
+        (int24 level, bool found) = _next(bitmap, bids, from, to, cfg.levelSpacing);
+        while (found) {
+            uint256 size = _size(poolId, level, bids);
+            if (size > largest) largest = size;
+            (level, found) =
+                _next(bitmap, bids, bids ? level - cfg.levelSpacing : level + cfg.levelSpacing, to, cfg.levelSpacing);
+        }
+
+        (level, found) = _next(bitmap, bids, from, to, cfg.levelSpacing);
+        while (found) {
+            if (_size(poolId, level, bids) * skipDivisor < largest) {
+                emit LevelSkipped(poolId, level, bids);
+            } else {
+                Level storage l = _levels[poolId][level];
+                uint256 cost = bids
+                    ? (l.bidLiquidity != 0 ? 1 : 0) + _popcount(l.bidMask)
+                    : (l.askLiquidity != 0 ? 1 : 0) + _popcount(l.askMask);
+                if (cost > budget - spent) return (spent, true, level);
+                spent += _flipSide(key, poolId, cfg, level, bids);
+            }
+            (level, found) =
+                _next(bitmap, bids, bids ? level - cfg.levelSpacing : level + cfg.levelSpacing, to, cfg.levelSpacing);
+        }
+    }
+
+    /// @dev The next level with orders on that side, going up from `from` to `to` for asks, down for bids.
+    function _next(mapping(int16 => uint256) storage bitmap, bool bids, int24 from, int24 to, int24 spacing)
+        internal
+        view
+        returns (int24, bool)
+    {
+        return bids ? bitmap.nextDown(from, to, spacing) : bitmap.nextUp(from, to, spacing);
+    }
+
+    /// @dev A level side's size, for comparing levels (DESIGN.md section 2).
+    function _size(PoolId poolId, int24 levelTick, bool bids) internal view returns (uint256) {
+        Level storage l = _levels[poolId][levelTick];
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(levelTick);
+        return bids ? OrderMath.bidSize(sqrtLower, l.bidLiquidity) : OrderMath.askSize(sqrtLower, l.askLiquidity);
+    }
+
+    function _popcount(uint8 x) internal pure returns (uint256 count) {
+        for (; x != 0; x &= x - 1) {
+            ++count;
+        }
     }
 
     /// @dev Flips one fully converted side of a level: removes its liquidity, then re-posts each group's share,

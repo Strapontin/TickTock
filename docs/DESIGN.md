@@ -194,7 +194,8 @@ No chain reactions: the price only moves one way during a swap, and re-posted or
   - Levels of similar size are never skipped, however many a swap crosses. The budget flips the first ones and the rest are ordinary leftovers.
   - To get a real order skipped, an attacker needs an order `skipDivisor` times bigger in the same scan: real capital, in an order that actually trades.
   - Skipped levels can be flipped by anyone with `flipLevel`. The `LevelSkipped` event says which ones.
-- **Leftovers.** Levels the budget didn't reach stay crossed but unflipped. They're picked up by the next swap in the same direction, or by anyone calling `flipCrossed`, which runs the same scan on both sides with a budget the caller picks.
+- **Leftovers.** Levels the budget didn't reach stay crossed but unflipped. They're picked up by the next swap in the same direction, or by anyone calling `flipCrossed`, which runs the same scan on both sides with a budget the caller picks and returns the operations it spent.
+- **Swaps that cross nothing.** `afterSwap` first checks the bitmap between the cursor and the last crossed level. If no level there holds orders, it only updates the cursors, without calling the engine.
 - **No loss from a late flip.** A level that wasn't flipped is still a normal position. If the price comes back, it simply un-fills (it buys back at the same price). The user misses a trade but loses nothing.
 - **Cursors.** An upward scan covers the ask levels in `[askCursor, T-1]`. A downward scan covers the bid levels from `bidCursor` down to the lowest crossed one. With `T` taken after the price move:
   - On pool creation, both cursors are set to `T`.

@@ -11,7 +11,7 @@ import {TickTockEngine} from "../src/TickTockEngine.sol";
 import {TickTockHook} from "../src/TickTockHook.sol";
 import {TickTockTestBase} from "./utils/TickTockTestBase.sol";
 
-/// @notice Flipping one level with `flipLevel` (DESIGN.md section 5.2). Swaps don't flip yet.
+/// @notice Flipping one level (DESIGN.md section 5.2). Swaps flip the levels they fully cross.
 contract FlipsTest is TickTockTestBase {
     using PoolIdLibrary for PoolKey;
 
@@ -40,11 +40,9 @@ contract FlipsTest is TickTockTestBase {
     function test_flipAsks_exactAmounts() public {
         (uint64 groupId, uint256 shares) = _deposit(hook, poolKey, alice, 100, 1, true, 1e18);
         uint256 askLiquidity = hook.getLevel(poolId, 100).askLiquidity;
-        _swapToTick(poolKey, 101);
-
         vm.expectEmit(address(hook));
         emit TickTockState.LevelFlipped(poolId, 100, false, askLiquidity, false);
-        _flip(100);
+        _swapToTick(poolKey, 101);
 
         // The asks left level 100 entirely.
         TickTockState.Level memory source = hook.getLevel(poolId, 100);
@@ -81,7 +79,6 @@ contract FlipsTest is TickTockTestBase {
         (uint64 groupId,) = _deposit(hook, poolKey, bob, 100, 1, false, 1e18);
         uint256 bidLiquidity = hook.getLevel(poolId, 50).bidLiquidity;
         _swapToTick(poolKey, 50);
-        _flip(50);
 
         (uint160 lower, uint160 upper) = OrderMath.bounds(50);
         uint256 principal0 = OrderMath.amount0ForLiquidity(lower, upper, uint128(bidLiquidity), false);
@@ -123,7 +120,6 @@ contract FlipsTest is TickTockTestBase {
         poolId = poolKey.toId();
         (uint64 groupId,) = _deposit(hook, poolKey, alice, 100, 1, true, 1e18);
         _swapToTick(poolKey, 101);
-        _flip(100);
 
         // Everything was re-posted: the fees didn't stay pending.
         TickTockState.Group memory g = hook.getGroup(groupId);
@@ -137,7 +133,6 @@ contract FlipsTest is TickTockTestBase {
         assertEq(g.pending0, 0, "an upward swap pays its fee in token1 only");
 
         _swapToTick(poolKey, 50);
-        _flip(50);
         (uint256 amount0,) = hook.positionOf(alice, groupId);
         assertGt(amount0, _afterRoundTrips(1e18, 1) * 1005 / 1000);
     }
@@ -149,7 +144,6 @@ contract FlipsTest is TickTockTestBase {
         (uint64 c,) = _deposit(hook, poolKey, carol, 100, 2, true, 3e18);
         uint256 total = hook.getLevel(poolId, 100).askLiquidity;
         _swapToTick(poolKey, 101);
-        _flip(100);
 
         (uint160 lower, uint160 upper) = OrderMath.bounds(100);
         uint256 principal1 = OrderMath.amount1ForLiquidity(lower, upper, uint128(total), false);
@@ -173,16 +167,19 @@ contract FlipsTest is TickTockTestBase {
     // Deposits and refusals
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// A deposit into a crossed level flips it first: the crossed orders get their trade.
+    /// A deposit into a crossed level flips it first, so the crossed orders get their trade. Here the level was
+    /// skipped by the swap's scan as dust next to a large order crossed with it.
     function test_depositFlipsACrossedTargetLevel() public {
-        (uint64 aliceGroup,) = _deposit(hook, poolKey, alice, 100, 1, true, 1e18);
-        _swapToTick(poolKey, 101);
+        (uint64 dustGroup,) = _deposit(hook, poolKey, alice, 100, 1, true, 1e8);
+        _deposit(hook, poolKey, carol, 110, 1, true, 1e18);
+        _swapToTick(poolKey, 111);
+        assertEq(hook.slotGroup(poolId, 100, false, 1), dustGroup, "the dust was skipped, still crossed");
 
         (uint64 bobGroup,) = _deposit(hook, poolKey, bob, 100, 1, true, 1e18);
-        assertTrue(bobGroup != aliceGroup);
+        assertTrue(bobGroup != dustGroup);
         assertEq(hook.slotGroup(poolId, 100, false, 1), bobGroup);
-        assertEq(hook.slotGroup(poolId, 50, true, 1), aliceGroup);
-        assertTrue(hook.getGroup(aliceGroup).isBid);
+        assertEq(hook.slotGroup(poolId, 50, true, 1), dustGroup);
+        assertTrue(hook.getGroup(dustGroup).isBid);
         assertEq(_price(poolKey), _sqrt(100));
     }
 
@@ -238,7 +235,6 @@ contract FlipsTest is TickTockTestBase {
         // Alice's ask converts into more token1 than fits.
         (uint64 aliceGroup,) = _deposit(hook, poolKey, alice, sellLevel, 1, true, 1e30);
         _swapToTick(poolKey, sellLevel + 1);
-        _flip(sellLevel);
 
         TickTockState.Group memory g = hook.getGroup(aliceGroup);
         assertEq(g.liquidity, roomLeft, "fills the room exactly");
@@ -254,12 +250,10 @@ contract FlipsTest is TickTockTestBase {
         // Bob leaves, then the price goes down through the bids and back up through the asks.
         _withdrawAll(hook, bob, bobGroup);
         _swapToTick(poolKey, bidLevel);
-        _flip(bidLevel);
         g = hook.getGroup(aliceGroup);
         assertFalse(g.isBid);
         assertGt(g.pending1, 0, "the unplaced token1 rides along, untraded");
         _swapToTick(poolKey, sellLevel + 1);
-        _flip(sellLevel);
 
         g = hook.getGroup(aliceGroup);
         assertTrue(g.isBid);
@@ -270,12 +264,10 @@ contract FlipsTest is TickTockTestBase {
     // Helpers
     // ---------------------------------------------------------------------------------------------------------------
 
-    /// Up through the ask at 100, flip, down through the bid at 50, flip.
+    /// Up through the ask at 100 and down through the bid at 50: each swap flips the level it crosses.
     function _roundTrip() internal {
         _swapToTick(poolKey, 101);
-        _flip(100);
         _swapToTick(poolKey, 50);
-        _flip(50);
     }
 
     /// `amount0 * (1.0001^spread)^n`, with the exact tick-math ratio of fill prices at 100 and 50.

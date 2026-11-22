@@ -120,6 +120,9 @@ abstract contract TickTockState {
     /// @param bids True when bids flipped into asks, false when asks flipped into bids.
     event LevelFlipped(PoolId indexed poolId, int24 indexed level, bool bids, uint256 liquidity, bool partialFill);
     event GroupsMerged(uint64 indexed survivor, uint64 indexed absorbed, uint256 newShares);
+    /// @notice A scan passed over a crossed level that was small next to the largest one crossed with it. Anyone can
+    /// flip it with `flipLevel`.
+    event LevelSkipped(PoolId indexed poolId, int24 indexed level, bool bids);
     /// @notice A flip couldn't place `amount` at `level` because of v4's per-tick limit. It stays pending.
     event AmountUnplaced(uint64 indexed groupId, int24 level, uint256 amount);
     event SharesConverted(

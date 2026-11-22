@@ -17,7 +17,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | 2 | Factory and hook skeleton | Done |
 | 3 | Deposits, withdrawals and fees | Done |
 | 4 | Flips and merges | Done |
-| 5 | Swaps: budget, skipping and cursors | To do |
+| 5 | Swaps: budget, skipping and cursors | Done |
 | 6 | Partial flips | To do |
 | 7 | Hardening | To do |
 | 8 | Gas and deployment | To do |
@@ -105,6 +105,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 
 ### 8. Gas and deployment
 
+- Starting point, measured after step 5 with the test PoolManager: a swap that crosses no level costs about 52k gas, and each flipped level with one spread adds roughly 300k to 350k, mostly first writes to fresh storage (groups, levels, slots, v4 ticks). A swap flipping 12 such levels used about 4.5M gas.
 - The worst-case swap, measured with every slot full until the budget runs out.
 - Gas snapshots.
 - Tuning `skipDivisor` and the partial-flip threshold.

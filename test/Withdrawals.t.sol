@@ -83,8 +83,8 @@ contract WithdrawalsTest is TickTockTestBase {
         assertEq(amount1, expected1);
     }
 
-    /// A fully crossed level that hasn't flipped pays out the token it converted into.
-    function test_withdrawFromACrossedLevel() public {
+    /// After a swap crosses the ask and flips it into a bid, the user gets the token it converted into.
+    function test_withdrawAfterAFlip() public {
         (uint64 groupId,) = _deposit(hook, poolKey, alice, 100, 0, true, 1e18);
         _swapToTick(poolKey, 101);
 

@@ -37,14 +37,14 @@ contract MergesTest is TickTockTestBase {
         (groupId,) = _deposit(hook, poolKey, user, 100, 1, false, amount);
     }
 
+    /// Up through the ask at 100, which the swap flips.
     function _up() internal {
         _swapToTick(poolKey, 101);
-        hook.flipLevel(poolKey, 100);
     }
 
+    /// Down through the bid at 50, which the swap flips.
     function _down() internal {
         _swapToTick(poolKey, 50);
-        hook.flipLevel(poolKey, 50);
     }
 
     /// The token1 an ask of `amount0` at 100 converts into.
@@ -58,10 +58,9 @@ contract MergesTest is TickTockTestBase {
         uint64 aliceGroup = _ask(alice, 1e18);
         uint256 bobShares = hook.sharesOf(bob, bobGroup);
 
-        _swapToTick(poolKey, 101);
         vm.expectEmit(true, true, false, false, address(hook));
         emit TickTockState.GroupsMerged(bobGroup, aliceGroup, 0);
-        hook.flipLevel(poolKey, 100);
+        _up();
 
         TickTockState.Group memory survivor = hook.getGroup(bobGroup);
         TickTockState.Group memory absorbed = hook.getGroup(aliceGroup);
