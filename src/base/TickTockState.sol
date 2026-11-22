@@ -213,10 +213,15 @@ abstract contract TickTockState {
         uint256 growth1 = level.feeGrowth1X128;
         uint256 liquidity = g.liquidity;
         if (liquidity != 0) {
+            // Growth differences wrap, as in v4. The additions are checked: a pending balance must never wrap.
+            uint256 delta0;
+            uint256 delta1;
             unchecked {
-                g.pending0 += FullMath.mulDiv(growth0 - g.feeGrowthLast0X128, liquidity, FixedPoint128.Q128).toUint128();
-                g.pending1 += FullMath.mulDiv(growth1 - g.feeGrowthLast1X128, liquidity, FixedPoint128.Q128).toUint128();
+                delta0 = growth0 - g.feeGrowthLast0X128;
+                delta1 = growth1 - g.feeGrowthLast1X128;
             }
+            g.pending0 += FullMath.mulDiv(delta0, liquidity, FixedPoint128.Q128).toUint128();
+            g.pending1 += FullMath.mulDiv(delta1, liquidity, FixedPoint128.Q128).toUint128();
         }
         g.feeGrowthLast0X128 = growth0;
         g.feeGrowthLast1X128 = growth1;

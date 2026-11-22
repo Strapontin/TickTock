@@ -321,12 +321,14 @@ contract TickTockHook is TickTockState, IHooks, IUnlockCallback, ReentrancyGuard
         int24 levelTick = _groupLevel(_config(), g);
         Level storage level = _levels[g.poolId][levelTick];
         (uint256 growth0, uint256 growth1) = _projectedFeeGrowth(g.poolId, levelTick, level);
-        uint256 pending0;
-        uint256 pending1;
+        uint256 delta0;
+        uint256 delta1;
         unchecked {
-            pending0 = g.pending0 + FullMath.mulDiv(growth0 - g.feeGrowthLast0X128, g.liquidity, FixedPoint128.Q128);
-            pending1 = g.pending1 + FullMath.mulDiv(growth1 - g.feeGrowthLast1X128, g.liquidity, FixedPoint128.Q128);
+            delta0 = growth0 - g.feeGrowthLast0X128;
+            delta1 = growth1 - g.feeGrowthLast1X128;
         }
+        uint256 pending0 = g.pending0 + FullMath.mulDiv(delta0, g.liquidity, FixedPoint128.Q128);
+        uint256 pending1 = g.pending1 + FullMath.mulDiv(delta1, g.liquidity, FixedPoint128.Q128);
 
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(g.poolId);
         (uint160 sqrtLower, uint160 sqrtUpper) = OrderMath.bounds(levelTick);

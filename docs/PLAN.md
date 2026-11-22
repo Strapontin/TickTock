@@ -19,7 +19,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 | 4 | Flips and merges | Done |
 | 5 | Swaps: budget, skipping and cursors | Done |
 | 6 | Partial flips | Done |
-| 7 | Hardening | To do |
+| 7 | Hardening | Done |
 | 8 | Gas and deployment | To do |
 
 ### 0. Setup
