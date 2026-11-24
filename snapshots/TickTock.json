@@ -1,0 +1,16 @@
+{
+  "deposit: creates the pool": "469785",
+  "deposit: existing group": "90479",
+  "deposit: new group": "370393",
+  "flipCrossed: 8 leftover levels, 1 spread": "2398682",
+  "flipLevel: 95% filled, 1 spread": "404462",
+  "swap: budget spent on 1-spread levels (12 levels, 24 ops)": "4876765",
+  "swap: budget spent on 8-spread levels (2 levels, 18 ops)": "4210815",
+  "swap: crosses no level": "68455",
+  "swap: flips 1 level back into a used level, 1 spread (2 ops)": "352677",
+  "swap: flips 1 level, 1 spread (2 ops)": "569598",
+  "swap: flips 1 level, 8 spreads (9 ops)": "2173436",
+  "swap: flips 1 level, 8 spreads, 8 merges (9 ops)": "705296",
+  "swap: stops inside a level": "164612",
+  "withdraw: all, out of range": "51334"
+}
