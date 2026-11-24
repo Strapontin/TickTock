@@ -363,4 +363,19 @@ Tests:
 
 9 is the floor (the busiest level must fit in one swap) and keeps the worst case near 2M gas on mainnet. On L2s, gas is cheap and transaction limits are higher, so 24 flips more crossed levels per swap and leaves fewer for keepers. Use the gas test's numbers to pick a different value for a specific chain.
 
+`test/fork/UnichainFork.t.sol` measures the same operations against Uniswap's deployments on Unichain mainnet, with swaps sent through the Universal Router and paid with Permit2, as wallets send them. Its numbers are in `snapshots/TickTockUnichain.json`:
+
+| Operation, on Unichain | Gas |
+|---|---|
+| Router swap that crosses no level | 214k |
+| Router swap that flips one level, 1 spread (2 operations) | 608k |
+| Router swap, worst case: two 8-spread levels into fresh destinations (18 operations) | 3.6M |
+| `flipCrossed` of one 8-spread level (9 operations) | 1.64M |
+| Deposit into a new group | 352k |
+| Factory deployment, with the implementation and the engine | 7.7M |
+
+- The deployed PoolManager is cheaper than the test build: the worst case is about 190k per operation, against 230k above. At 24 operations, that's about 4.6M gas per swap.
+- The V4Quoter includes `afterSwap` in its quotes and its gas estimates (547k for the one-level flip), so routers see a flip's cost before they choose a route.
+- Every deployment transaction is under 16.7M gas, Ethereum's per-transaction cap since Fusaka (EIP-7825), so the same deployment works on any chain.
+
 `skipDivisor` and the partial-flip threshold kept their starting values: the gas tests gave no reason to move them. Both are judgment calls about griefing rather than gas, and deployment data could justify tuning them in a later version.

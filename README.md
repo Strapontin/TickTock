@@ -29,6 +29,8 @@ forge build
 forge test                       # unit, fuzz and invariant tests
 FOUNDRY_PROFILE=ci forge test    # 10x the fuzz runs, deeper invariant runs (a few minutes)
 forge test --mc GasTest          # refreshes snapshots/TickTock.json
+UNICHAIN_RPC_URL=https://mainnet.unichain.org forge test --mp "test/fork/*"
+                                 # against Uniswap's real deployments, on a Unichain fork
 ```
 
 The compiler settings are pinned in `foundry.toml`: solc 0.8.26, `cancun`, via-IR, 200 optimizer runs. Check that v4's `PoolManager` still compiles before changing the runs: some values hit "stack too deep" in v4's code.
@@ -38,9 +40,11 @@ The compiler settings are pinned in `foundry.toml`: solc 0.8.26, `cancun`, via-I
 Deploy a factory, and optionally a first config's hook, with the deploy script:
 
 ```sh
-POOL_MANAGER=0x... MAX_OPS_PER_SWAP=24 LEVEL_SPACING=10 SPREADS=10,50,100 \
+MAX_OPS_PER_SWAP=24 LEVEL_SPACING=10 SPREADS=10,50,100 \
 forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --account <keystore>
 ```
+
+- The script finds Uniswap's PoolManager on Unichain and Unichain Sepolia ([script/UniswapAddresses.sol](script/UniswapAddresses.sol)). On any other chain, set `POOL_MANAGER=0x...`.
 
 - `MAX_OPS_PER_SWAP` is the most liquidity operations one swap's `afterSwap` may spend, fixed per factory. Use 9 on Ethereum mainnet and 24 on L2s. The worst case adds about 230k gas per operation to a swap (DESIGN.md section 12).
 - Leave out `LEVEL_SPACING` and `SPREADS` to deploy only the factory. Set `FACTORY=0x...` to add a hook to an existing factory.

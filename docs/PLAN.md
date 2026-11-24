@@ -127,7 +127,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps, then ta
 | # | Step | Branch | Status |
 |---|---|---|---|
 | 9 | Merge and housekeeping | `main` | Done |
-| 10 | Fork tests on Unichain | `main` | Planned |
+| 10 | Fork tests on Unichain | `main` | Done |
 | 11 | Unichain Sepolia deployment | `main` | Planned |
 | 12 | Indexer | `offchain` | Planned |
 | 13 | Keeper bot | `offchain` | Planned |
@@ -154,6 +154,13 @@ The unit tests use a PoolManager compiled for testing and v4's test routers. The
 - Swaps through the Universal Router, paid with Permit2, the way wallets and aggregators trade. Quotes from the V4Quoter, including swaps that flip levels.
 - Real gas numbers for the main operations and the worst case, compared with the snapshot.
 - The Uniswap addresses per chain in one place, shared by the scripts and the tests.
+
+Outcome:
+- `test/fork/UnichainFork.t.sol`, 6 tests, all passing on the first run against the real deployments. CI runs them in a separate job.
+- The V4Quoter's quote matches the Universal Router's swap exactly when the swap flips a level, so quotes include `afterSwap`.
+- The deployed PoolManager is cheaper than the test build: the worst case is 3.6M gas through the router, about 190k per operation (DESIGN.md section 12).
+- The factory deployment takes 7.7M gas, under the 16.7M cap.
+- `script/UniswapAddresses.sol` holds the addresses for Unichain and Unichain Sepolia; the deploy script uses it when `POOL_MANAGER` isn't set.
 
 ### 11. Unichain Sepolia deployment
 
