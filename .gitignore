@@ -1,4 +1,12 @@
+# Foundry
 cache/
 out/
 broadcast/*/31337/
+
+# Coverage
+lcov.info
+coverage/
+report/
+
+# Secrets
 .env

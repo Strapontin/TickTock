@@ -64,6 +64,14 @@ contract FeesTest is TickTockTestBase {
         assertEq(amount1, expected1);
     }
 
+    function test_positionOfWithNoShares() public {
+        (uint64 groupId,) = _deposit(hook, poolKey, alice, LEVEL, 0, true, 1e18);
+        _roundTrip();
+        (uint256 amount0, uint256 amount1) = hook.positionOf(bob, groupId);
+        assertEq(amount0, 0);
+        assertEq(amount1, 0);
+    }
+
     /// A group created after fees were earned at its level gets none of them.
     function test_newGroupDoesNotShareEarlierFees() public {
         (uint64 aliceGroup,) = _deposit(hook, poolKey, alice, LEVEL, 0, true, 1e18);

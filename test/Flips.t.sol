@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -208,6 +209,20 @@ contract FlipsTest is TickTockTestBase {
         TickTockEngine engine = TickTockEngine(hook.engine());
         vm.expectRevert(TickTockState.NotDelegateCall.selector);
         engine.flipSide(poolKey, 100, false);
+        vm.expectRevert(TickTockState.NotDelegateCall.selector);
+        engine.scan(poolKey, true, MAX_OPS, 2 * uint256(MAX_OPS));
+    }
+
+    /// A revert inside the engine reaches the caller unchanged, so keepers and wallets see the real error.
+    function test_engineRevertsBubbleUp() public {
+        _deposit(hook, poolKey, alice, 100, 0, true, 1e18);
+        (uint160 lower, uint160 upper) = OrderMath.bounds(100);
+        _swapTo(poolKey, upper - (upper - lower) / 20); // 95% sold: flipLevel flips it, in the engine
+
+        bytes memory failure = abi.encodeWithSignature("Error(string)", "modifyLiquidity failed");
+        vm.mockCallRevert(address(manager), IPoolManager.modifyLiquidity.selector, failure);
+        vm.expectRevert(failure);
+        _flip(100);
     }
 
     // ---------------------------------------------------------------------------------------------------------------

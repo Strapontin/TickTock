@@ -1,14 +1,20 @@
 # TickTock: build plan
 
-This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each step builds on the previous one and ends in a working, tested state.
+This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps, then takes them to a testnet. Each step builds on the previous one and ends in a working, tested state.
+
+- **Phase 1, steps 0 to 8: the contracts.** Done, built on the `feat/v1-contracts` branch.
+- **Phase 2, steps 9 to 15: testnet and the off-chain services.** Unichain Sepolia first, then an audit.
 
 ## How each step works
 
-- All work happens on the `feat/v1-contracts` branch, with one or more commits per step. Nothing is pushed until the owner asks.
-- A step is done when `forge build` and `forge test` pass, `forge fmt --check` is clean, and DESIGN.md matches what was built.
+- A step is done when `forge build` and `forge test` pass, `forge fmt --check` is clean, and DESIGN.md matches what was built. Off-chain steps also need their own tests and type checks to pass.
 - Each step ends with a short report: what changed, the test results, and any decision that needs the owner.
+- Phase 1 worked on `feat/v1-contracts` and pushed nothing. From phase 2 on:
+  - The contracts, scripts and docs live on `main`, and `main` is pushed when a step is done.
+  - The indexer and keeper live on the `offchain` branch. It starts from `main` and merges `main` to pick up contract changes, so it always builds the ABIs from the current contracts.
+  - The front end will get a branch of its own later.
 
-## Steps
+## Phase 1: the contracts
 
 | # | Step | Status |
 |---|---|---|
@@ -116,10 +122,77 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps. Each st
 - `maxOpsPerSwap`: 9 on mainnet, 24 on L2s (DESIGN.md section 12). `skipDivisor` and the partial-flip threshold keep their starting values.
 - `script/Deploy.s.sol`, tested end to end, and a README usage section.
 
-## After the plan
+## Phase 2: testnet and off-chain services
 
-- **Audit.** An external audit before any mainnet deployment. The contracts have no admin and can't be upgraded, so a bug can't be patched after launch.
-- **Out of scope for now:**
-  - The front-end.
-  - A keeper bot that calls `flipLevel` and `flipCrossed` from events.
-  - The far-price mitigation in DESIGN.md section 9.
+| # | Step | Branch | Status |
+|---|---|---|---|
+| 9 | Merge and housekeeping | `main` | Done |
+| 10 | Fork tests on Unichain | `main` | Planned |
+| 11 | Unichain Sepolia deployment | `main` | Planned |
+| 12 | Indexer | `offchain` | Planned |
+| 13 | Keeper bot | `offchain` | Planned |
+| 14 | Testnet soak | both | Planned |
+| 15 | Audit preparation | `main` | Planned |
+
+### 9. Merge and housekeeping
+
+- Restore the gas snapshot: `forge coverage` rewrites it with unoptimized numbers. Ignore coverage output files.
+- Read the coverage report, and add tests for any branch that matters and isn't covered.
+- Merge `feat/v1-contracts` into `main` and push. CI runs on GitHub from then on.
+
+Outcome:
+- Coverage needs a memory cap on a 16 GB machine: `solc` peaks at about 7 GB with `--ir-minimum`. Run it as `systemd-run --user --scope -p MemoryMax=7G forge coverage --ir-minimum --report lcov`, or in CI.
+- Every line of the engine, the factory, the state base and `OrderMath` runs. The uncovered lines elsewhere are source-map artifacts of `--ir-minimum` (modifier bodies, assembly blocks).
+- Three branches were untested and now have tests: the engine refusing a direct `scan`, an engine revert reaching the caller unchanged, and `positionOf` for someone with no shares.
+- Left uncovered on purpose: `_projectedFeeGrowth` on a level with no liquidity (a view returning the stored growth), and the early returns of `_pay` and `_settleDeltas` for zero amounts.
+
+### 10. Fork tests on Unichain
+
+The unit tests use a PoolManager compiled for testing and v4's test routers. These tests use the real deployments on a fork of Unichain mainnet. They're opt-in: they run when `UNICHAIN_RPC_URL` is set.
+
+- Deploy the factory and a hook against the deployed PoolManager. Check that each deployment transaction fits under 16.7M gas, Ethereum's per-transaction cap since Fusaka (EIP-7825), so the same deployment works on any chain.
+- Swaps through the Universal Router, paid with Permit2, the way wallets and aggregators trade. Quotes from the V4Quoter, including swaps that flip levels.
+- Real gas numbers for the main operations and the worst case, compared with the snapshot.
+- The Uniswap addresses per chain in one place, shared by the scripts and the tests.
+
+### 11. Unichain Sepolia deployment
+
+- A testnet-only deployer key in the gitignored `.env`. It never goes to mainnet.
+- Two mintable test tokens, the factory with `maxOpsPerSwap` 24, and one hook config.
+- Scripts to seed orders and to trade through the Universal Router, so the testnet has activity without arbitrage bots.
+- Contracts verified on the explorer. Addresses recorded in `deployments/unichain-sepolia.json`.
+
+### 12. Indexer
+
+A [Ponder](https://ponder.sh) indexer, the data source for the front end:
+
+- Hooks from the factory's `HookCreated`, pools from the PoolManager's `Initialize` for those hooks.
+- Groups, merges, levels and flips from the hook's events. Each user's shares per group, following `SharesConverted`.
+- GraphQL and SQL APIs. Tests against a local chain.
+
+### 13. Keeper bot
+
+A TypeScript service with viem. It reads the chain directly, so it works without the indexer:
+
+- After each block with activity on a TickTock pool, it simulates `flipCrossed`, and sends it if levels are left to flip.
+- It simulates `flipLevel` for levels reported by `LevelSkipped`, and for the level the price stopped inside once 90% of it is sold.
+- It only sends what its simulation says will succeed, with a gas price cap and a gas budget.
+- Tests against a local chain with the real contracts.
+
+### 14. Testnet soak
+
+- Run the keeper and a scripted trader on Unichain Sepolia for several days.
+- A script that checks the invariant suite's structure checks against live state.
+- Fix what turns up, and redeploy if the contracts change.
+
+### 15. Audit preparation
+
+- Freeze the contracts and tag a release candidate.
+- `docs/AUDIT.md`: the scope with line counts, the known issues, the invariants and how to run everything.
+- Choosing and booking auditors is the owner's call. Auditors are usually booked weeks ahead, so it's worth contacting them during step 14.
+
+## Later
+
+- **The front end**, on its own branch, reading from the indexer.
+- **Unichain mainnet**, after the audit.
+- **The far-price mitigation** in DESIGN.md section 9, if the testnet shows it's needed.
