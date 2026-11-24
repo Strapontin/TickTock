@@ -128,7 +128,7 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps, then ta
 |---|---|---|---|
 | 9 | Merge and housekeeping | `main` | Done |
 | 10 | Fork tests on Unichain | `main` | Done |
-| 11 | Unichain Sepolia deployment | `main` | Planned |
+| 11 | Unichain Sepolia deployment | `main` | In progress |
 | 12 | Indexer | `offchain` | Planned |
 | 13 | Keeper bot | `offchain` | Planned |
 | 14 | Testnet soak | both | Planned |
@@ -168,6 +168,11 @@ Outcome:
 - Two mintable test tokens, the factory with `maxOpsPerSwap` 24, and one hook config.
 - Scripts to seed orders and to trade through the Universal Router, so the testnet has activity without arbitrage bots.
 - Contracts verified on the explorer. Addresses recorded in `deployments/unichain-sepolia.json`.
+
+Progress:
+- Done: `script/testnet/` (`DeployTestnet`, `Seed`, `Trade`, `verify.sh`, and the test token), sharing `script/DeployBase.sol` with `Deploy` and `script/UniversalRouterSwap.sol` with the fork tests. `test/fork/TestnetScripts.t.sol` runs all three scripts on a Sepolia fork.
+- Rehearsed with real broadcasts on a local fork of Unichain Sepolia: 28 transactions, at most 7.6M gas each, about 0.00001 ETH in all at the current gas price.
+- Left: the broadcast itself, once the deployer is funded, then verification.
 
 ### 12. Indexer
 

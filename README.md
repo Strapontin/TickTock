@@ -50,6 +50,23 @@ forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --account <keyst
 - Leave out `LEVEL_SPACING` and `SPREADS` to deploy only the factory. Set `FACTORY=0x...` to add a hook to an existing factory.
 - A hook's address must carry its permission bits, so creating one needs a salt. The deploy script mines it. To mine one on its own: `FACTORY=0x... LEVEL_SPACING=10 SPREADS=10,50,100 forge script script/MineSalt.s.sol --rpc-url $RPC_URL`, then call `factory.createHook(levelSpacing, spreads, salt)`. Anyone can create a config's hook; each config gets exactly one.
 
+## Testnet
+
+TickTock runs on Unichain Sepolia with two test tokens anyone can mint, tWETH (18 decimals) and tUSDC (6 decimals). Every address is in [deployments/unichain-sepolia.json](deployments/unichain-sepolia.json), including the pool key. Which token is `currency0` depends on their addresses.
+
+The testnet scripts sign with `PRIVATE_KEY` from `.env` (see [.env.example](.env.example)). Use a testnet-only key.
+
+```sh
+forge script script/testnet/DeployTestnet.s.sol --rpc-url unichain_sepolia --broadcast  # tokens, factory, hook
+script/testnet/verify.sh                                     # source on Sourcify and Blockscout
+forge script script/testnet/Seed.s.sol --rpc-url unichain_sepolia --broadcast  # 8 asks, 8 bids around 3,000
+# One swap through the Universal Router. AMOUNT_IN is in the input token's raw units.
+ZERO_FOR_ONE=false AMOUNT_IN=2500000000000000000 \
+forge script script/testnet/Trade.s.sol --rpc-url unichain_sepolia --broadcast
+```
+
+To get test tokens: `cast send <token> "mint(address,uint256)" <you> <amount> --rpc-url unichain_sepolia`.
+
 ## Using a hook
 
 Pools use tick spacing 1, a static fee, and the hook's address. There's no need to create the pool: the first deposit does, at that order's price.

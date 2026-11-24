@@ -12,41 +12,10 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {HookSaltMiner} from "../../script/HookSaltMiner.sol";
 import {UniswapAddresses} from "../../script/UniswapAddresses.sol";
+import {IPermit2, IUniversalRouter, IV4Quoter, UniversalRouterSwap} from "../../script/UniversalRouterSwap.sol";
 import {HookConfig} from "../../src/libraries/HookConfig.sol";
 import {TickTockFactory} from "../../src/TickTockFactory.sol";
 import {TickTockHook} from "../../src/TickTockHook.sol";
-
-// The parts of Uniswap's periphery these tests call, as deployed on Unichain.
-
-interface IUniversalRouter {
-    function execute(bytes calldata commands, bytes[] calldata inputs, uint256 deadline) external payable;
-}
-
-interface IPermit2 {
-    function approve(address token, address spender, uint160 amount, uint48 expiration) external;
-}
-
-interface IV4Quoter {
-    struct QuoteExactSingleParams {
-        PoolKey poolKey;
-        bool zeroForOne;
-        uint128 exactAmount;
-        bytes hookData;
-    }
-
-    function quoteExactInputSingle(QuoteExactSingleParams memory params)
-        external
-        returns (uint256 amountOut, uint256 gasEstimate);
-}
-
-/// @dev `IV4Router.ExactInputSingleParams`.
-struct ExactInputSingleParams {
-    PoolKey poolKey;
-    bool zeroForOne;
-    uint128 amountIn;
-    uint128 amountOutMinimum;
-    bytes hookData;
-}
 
 /// @notice TickTock against Uniswap's real deployments, on a fork of Unichain mainnet: the deployed PoolManager, and
 /// swaps through the Universal Router and the V4Quoter the way wallets and aggregators send them.
@@ -62,12 +31,6 @@ contract UnichainForkTest is Test {
     /// Ethereum's per-transaction gas cap since Fusaka (EIP-7825).
     uint256 internal constant TX_GAS_CAP = 1 << 24;
     string internal constant GROUP = "TickTockUnichain";
-
-    // Universal Router command and v4 router actions.
-    uint8 internal constant V4_SWAP = 0x10;
-    uint8 internal constant SWAP_EXACT_IN_SINGLE = 0x06;
-    uint8 internal constant SETTLE_ALL = 0x0c;
-    uint8 internal constant TAKE_ALL = 0x0f;
 
     /// A large ask far above the orders. Swaps buy through the orders and stop inside it, so they never push the
     /// price into empty space at the end of the tick range.
@@ -227,15 +190,9 @@ contract UnichainForkTest is Test {
     /// Buys token0 with exactly `amountIn` token1 through the Universal Router, and records the gas under `gasName`
     /// unless it's empty.
     function _buy0(uint128 amountIn, string memory gasName) internal returns (uint256 received) {
-        bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(ExactInputSingleParams(key, false, amountIn, 0, ""));
-        params[1] = abi.encode(key.currency1, uint256(amountIn));
-        params[2] = abi.encode(key.currency0, uint256(0));
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(abi.encodePacked(SWAP_EXACT_IN_SINGLE, SETTLE_ALL, TAKE_ALL), params);
-
+        (bytes memory commands, bytes[] memory inputs) = UniversalRouterSwap.exactInputSingle(key, false, amountIn, 0);
         uint256 before = token0.balanceOf(address(this));
-        router.execute(abi.encodePacked(V4_SWAP), inputs, block.timestamp);
+        router.execute(commands, inputs, block.timestamp);
         if (bytes(gasName).length != 0) vm.snapshotGasLastCall(GROUP, gasName);
         return token0.balanceOf(address(this)) - before;
     }

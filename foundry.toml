@@ -13,6 +13,8 @@ optimizer = true
 optimizer_runs = 200
 bytecode_hash = "none"
 gas_limit = "300000000"
+# The testnet scripts write deployments/; the script tests write and remove a scratch file there.
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 remappings = [
     "@uniswap/v4-core/=lib/v4-core/",
     "forge-std/=lib/forge-std/src/",
@@ -38,3 +40,8 @@ line_length = 120
 ignore = ["test/**/*.sol", "script/**/*.sol"]
 # `poolManager` follows the v4 hook convention and is part of the public API.
 exclude_lints = ["screaming-snake-case-immutable", "asm-keccak256"]
+
+# Public endpoints, for `--rpc-url unichain_sepolia`. Pass a full URL to use a provider instead.
+[rpc_endpoints]
+unichain = "https://mainnet.unichain.org"
+unichain_sepolia = "https://sepolia.unichain.org"

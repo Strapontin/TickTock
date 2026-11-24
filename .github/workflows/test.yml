@@ -21,8 +21,9 @@ jobs:
         env:
           FOUNDRY_PROFILE: ci
 
-  # Against Uniswap's deployments on a Unichain mainnet fork, pinned to one block. foundry-toolchain caches the fork
-  # state, so the public RPC only serves the first run. Set the UNICHAIN_RPC_URL secret to use another endpoint.
+  # Against Uniswap's deployments on Unichain and Unichain Sepolia forks, each pinned to one block. foundry-toolchain
+  # caches the fork state, so the public RPCs only serve the first run. Set the UNICHAIN_RPC_URL and
+  # UNICHAIN_SEPOLIA_RPC_URL secrets to use other endpoints.
   fork:
     runs-on: ubuntu-latest
     steps:
@@ -34,3 +35,4 @@ jobs:
         run: forge test --mp "test/fork/*" -vv
         env:
           UNICHAIN_RPC_URL: ${{ secrets.UNICHAIN_RPC_URL || 'https://mainnet.unichain.org' }}
+          UNICHAIN_SEPOLIA_RPC_URL: ${{ secrets.UNICHAIN_SEPOLIA_RPC_URL || 'https://sepolia.unichain.org' }}
