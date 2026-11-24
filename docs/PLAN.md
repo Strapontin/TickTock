@@ -129,8 +129,8 @@ This plan builds the contracts in [DESIGN.md](DESIGN.md) in small steps, then ta
 | 9 | Merge and housekeeping | `main` | Done |
 | 10 | Fork tests on Unichain | `main` | Done |
 | 11 | Unichain Sepolia deployment | `main` | In progress |
-| 12 | Indexer | `offchain` | Planned |
-| 13 | Keeper bot | `offchain` | Planned |
+| 12 | Indexer | `offchain` | Done |
+| 13 | Keeper bot | `offchain` | Done |
 | 14 | Testnet soak | both | Planned |
 | 15 | Audit preparation | `main` | Planned |
 
@@ -182,6 +182,11 @@ A [Ponder](https://ponder.sh) indexer, the data source for the front end:
 - Groups, merges, levels and flips from the hook's events. Each user's shares per group, following `SharesConverted`.
 - GraphQL and SQL APIs. Tests against a local chain.
 
+Outcome (`offchain/indexer`, see `offchain/README.md` on the `offchain` branch):
+- Slot moves follow the events; amounts are read from the hook at each event's block, so they can't drift.
+- Its end-to-end test compares every indexed group, slot, position and level with the hook, after a backfill and in realtime, with merges and a withdrawal that converts merged shares. Breaking the slot moves on purpose makes it fail.
+- Ponder 0.18 pins dependencies with published advisories, in features the indexer doesn't use. The README says how to run it until Ponder updates them.
+
 ### 13. Keeper bot
 
 A TypeScript service with viem. It reads the chain directly, so it works without the indexer:
@@ -190,6 +195,11 @@ A TypeScript service with viem. It reads the chain directly, so it works without
 - It simulates `flipLevel` for levels reported by `LevelSkipped`, and for the level the price stopped inside once 90% of it is sold.
 - It only sends what its simulation says will succeed, with a gas price cap and a gas budget.
 - Tests against a local chain with the real contracts.
+
+Outcome (`offchain/keeper`):
+- Its tests cover leftovers over a swap's budget, a level a scan skipped, a level 90% sold and one that isn't, dry runs, and the gas price cap. Turning off the skipped-level queue on purpose makes them fail.
+- A skipped level needs `flipLevel`: the scan's cursor moves past it, so `flipCrossed` never reaches it again.
+- The keeper's state is in memory: a restart reads the logs again from the deployment's start block.
 
 ### 14. Testnet soak
 
