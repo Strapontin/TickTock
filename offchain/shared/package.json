@@ -1,0 +1,20 @@
+{
+  "name": "@ticktock/shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./testing/index.ts"
+  },
+  "scripts": {
+    "abis": "node scripts/generate-abis.mjs",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "viem": "2.57.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}

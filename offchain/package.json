@@ -1,0 +1,14 @@
+{
+  "name": "ticktock-offchain",
+  "private": true,
+  "description": "TickTock's off-chain services: the indexer and the keeper bot.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["shared", "indexer", "keeper"],
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "abis": "npm run abis -w @ticktock/shared",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

@@ -10,3 +10,6 @@ report/
 
 # Secrets
 .env
+
+# Off-chain tests write a scratch deployment file per run
+deployments/e2e-*.json
