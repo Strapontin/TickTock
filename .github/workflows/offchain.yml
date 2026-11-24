@@ -1,0 +1,40 @@
+name: offchain
+
+# Only on the offchain branch, which is the only one with offchain/.
+on:
+  push:
+    branches: [offchain]
+  pull_request:
+    paths: ["offchain/**"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: offchain
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: offchain/package-lock.json
+      - name: Build the contracts
+        run: forge build
+        working-directory: .
+      - run: npm ci
+      - name: The ABIs match the contracts
+        run: npm run abis && git diff --exit-code shared/src/abis.ts
+      - name: Typecheck
+        run: npm run typecheck
+        env:
+          TICKTOCK_DEPLOYMENT: ${{ github.workspace }}/offchain/indexer/test/deployment.fixture.json
+      # Against anvil forking Unichain Sepolia, with TickTock deployed by the repository's scripts.
+      - name: Test
+        run: npm test
+        env:
+          UNICHAIN_SEPOLIA_RPC_URL: ${{ secrets.UNICHAIN_SEPOLIA_RPC_URL || 'https://sepolia.unichain.org' }}

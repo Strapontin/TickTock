@@ -22,7 +22,7 @@ import {
   type PublicClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { testTokenAbi } from "../src/abis.js";
+import { testTokenAbi, tickTockHookAbi } from "../src/abis.js";
 import { type Deployment, loadDeployment } from "../src/deployment.js";
 
 export const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../..");
@@ -30,6 +30,11 @@ export const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), ".
 /** Anvil's first default account: funded on every anvil chain, and public. Never use it anywhere else. */
 export const ANVIL_KEY: Hex = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 export const anvilAccount = privateKeyToAccount(ANVIL_KEY);
+/** Anvil's second default account, for the keeper. Public too. */
+export const ANVIL_KEEPER_KEY: Hex = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+
+/** v4's PoolSwapTest on Unichain Sepolia: swaps to an exact price limit, which the Universal Router can't. */
+const POOL_SWAP_TEST: Address = "0x9140a78c1a137c7ff1c151ec8231272af78a99a4";
 
 const SEPOLIA_RPC = process.env.UNICHAIN_SEPOLIA_RPC_URL ?? "https://sepolia.unichain.org";
 const FORK_BLOCK = 68_690_000;
@@ -51,7 +56,8 @@ export async function startLocalChain(name: string, port: number): Promise<Local
     ["--fork-url", SEPOLIA_RPC, "--fork-block-number", String(FORK_BLOCK), "--port", String(port), "--silent"],
     { env, stdio: "ignore" },
   );
-  const publicClient = createPublicClient({ transport: http(rpc) });
+  // No caching: the tests compare against the chain right after each transaction.
+  const publicClient = createPublicClient({ transport: http(rpc), cacheTime: 0 });
   await waitFor(async () => (await publicClient.getChainId()) > 0, 30_000, "anvil");
 
   const deploymentPath = join(repoRoot, "deployments", `${name}.json`);
@@ -113,6 +119,132 @@ export async function trade(chain: LocalChain, zeroForOne: boolean, amountIn: bi
   if (receipt.status !== "success") throw new Error("trade reverted");
   return receipt;
 }
+
+/** A deposit from anvil's account, minting and approving what it pays with. */
+export async function deposit(
+  chain: LocalChain,
+  sellLevel: number,
+  spreadIndex: number,
+  startWithToken0: boolean,
+  amount: bigint,
+) {
+  const d = chain.deployment;
+  const wallet = createWalletClient({ account: anvilAccount, transport: http(chain.rpc) });
+  const token = startWithToken0 ? d.pool.currency0 : d.pool.currency1;
+  const send = async (hash: Promise<Hex>) => chain.publicClient.waitForTransactionReceipt({ hash: await hash });
+  await send(wallet.writeContract({ chain: null, abi: testTokenAbi, address: token, functionName: "mint", args: [anvilAccount.address, amount] }));
+  await send(wallet.writeContract({ chain: null, abi: testTokenAbi, address: token, functionName: "approve", args: [d.hook, maxUint256] }));
+  const receipt = await send(
+    wallet.writeContract({
+      chain: null,
+      abi: tickTockHookAbi,
+      address: d.hook,
+      functionName: "deposit",
+      args: [poolKey(d), sellLevel, spreadIndex, startWithToken0, amount, 0n, anvilAccount.address, 2n ** 40n],
+    }),
+  );
+  if (receipt.status !== "success") throw new Error("deposit reverted");
+  return receipt;
+}
+
+/** Swaps from anvil's account until the price reaches `sqrtPriceX96`, through v4's PoolSwapTest. */
+export async function swapTo(chain: LocalChain, sqrtPriceX96: bigint) {
+  const d = chain.deployment;
+  const wallet = createWalletClient({ account: anvilAccount, transport: http(chain.rpc) });
+  const send = async (hash: Promise<Hex>) => chain.publicClient.waitForTransactionReceipt({ hash: await hash });
+  const { sqrtPriceX96: current } = await slot0(chain);
+  const zeroForOne = sqrtPriceX96 < current;
+  const input = zeroForOne ? d.pool.currency0 : d.pool.currency1;
+  const funds = 10n ** 40n;
+  await send(wallet.writeContract({ chain: null, abi: testTokenAbi, address: input, functionName: "mint", args: [anvilAccount.address, funds] }));
+  await send(wallet.writeContract({ chain: null, abi: testTokenAbi, address: input, functionName: "approve", args: [POOL_SWAP_TEST, maxUint256] }));
+  const receipt = await send(
+    wallet.writeContract({
+      chain: null,
+      abi: poolSwapTestAbi,
+      address: POOL_SWAP_TEST,
+      functionName: "swap",
+      args: [
+        poolKey(d),
+        { zeroForOne, amountSpecified: -(2n ** 120n), sqrtPriceLimitX96: sqrtPriceX96 },
+        { takeClaims: false, settleUsingBurn: false },
+        "0x",
+      ],
+    }),
+  );
+  if (receipt.status !== "success") throw new Error("swap reverted");
+  return receipt;
+}
+
+export async function slot0(chain: LocalChain): Promise<{ sqrtPriceX96: bigint; tick: number }> {
+  const [sqrtPriceX96, tick] = await chain.publicClient.readContract({
+    abi: stateViewAbi,
+    address: chain.deployment.stateView,
+    functionName: "getSlot0",
+    args: [chain.deployment.pool.id],
+  });
+  return { sqrtPriceX96, tick };
+}
+
+function poolKey(d: Deployment) {
+  const { currency0, currency1, fee, tickSpacing, hooks } = d.pool;
+  return { currency0, currency1, fee, tickSpacing, hooks };
+}
+
+const stateViewAbi = [
+  {
+    type: "function",
+    name: "getSlot0",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "protocolFee", type: "uint24" },
+      { name: "lpFee", type: "uint24" },
+    ],
+  },
+] as const;
+
+const poolSwapTestAbi = [
+  {
+    type: "function",
+    name: "swap",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "zeroForOne", type: "bool" },
+          { name: "amountSpecified", type: "int256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+      {
+        name: "testSettings",
+        type: "tuple",
+        components: [
+          { name: "takeClaims", type: "bool" },
+          { name: "settleUsingBurn", type: "bool" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+  },
+] as const;
 
 // The Universal Router encoding, as in script/UniversalRouterSwap.sol.
 
